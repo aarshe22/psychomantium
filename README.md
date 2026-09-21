@@ -1,6 +1,6 @@
 # Psychomantium
 
-Local, interactive lucid-dream sketch. You upload a photograph, a Waypoint world model generates successive frames, and you steer with WASD / mouse. Typed intentions are **not** live text-to-world on this checkpoint.
+Local, interactive lucid-dream sketch. Pick a first-person start frame (or upload a photograph). A Waypoint world model generates successive frames; you steer with WASD / mouse. Typed intentions are **not** live text-to-world on this checkpoint. Same core loop as Overworld’s [Biome](https://github.com/Overworldai/Biome) client: **seed pixels + `CtrlInput`**, not DiT prompts.
 
 This is exploration, not a psychological instrument. Generated images are not evidence about the player.
 
@@ -84,7 +84,9 @@ Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B`
 - **W** walk forward · **Z** walk back
 - **← →** turn left / right · **↑ ↓** look up / down
 - **R** reset orientation to the horizon
+- **U** reset to the original seed (`engine.reset()` + `append_frame`)
 - **Space** jump · click the viewport for pointer-lock mouse look
+- Session: gallery of original first-person start frames, or your photograph
 - Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
 - Movement keys are ignored while the intention/prompt fields are focused
 - **Enter** in the intention field submits
@@ -104,7 +106,9 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 | Motion smoothing | Exponential blend on look |
 | Dream sharpness | Remaps the 4-step noise schedule (same step count; compiled graph stays valid) |
 
-**Standing world prompt** (Session accordion, default *There is a standard road grid, and buildings.*) is persisted with preferences. Spoken unmatched lines become extra world rules. On this 1B checkpoint `set_prompt` is not wired into the DiT; the seed image and movement still drive the world. Say `forget that` to drop extra spoken rules.
+**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT (Biome’s 1B path does not call it either). The start frame and movement still drive the world. [Overworld Biome](https://github.com/Overworldai/Biome) gets “prompted” worlds by running **FLUX + VLM to paint a new seed image**, which this build does not load.
+
+The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch interval (EMA), instead of flashing all four at once. Click the FPS badge to cap at 30 or uncap.
 
 ## Troubleshooting
 

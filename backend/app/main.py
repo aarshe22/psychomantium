@@ -7,12 +7,14 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from PIL import Image
 
 from . import config
 from .engine_worker import worker
 from .prefs import SPECS
+from .seeds import catalog as seed_catalog
+from .seeds import jpeg_for as seed_jpeg
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
 
@@ -33,6 +35,9 @@ def validate_image(data: bytes, content_type: str | None) -> None:
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, worker.load)
+    from .seeds import ensure_gallery
+
+    loop.run_in_executor(None, ensure_gallery)
     yield
     worker.stop_session()
 
@@ -102,6 +107,25 @@ async def put_preferences(payload: dict[str, Any]):
     return {"ok": True, "persisted": persist, "prefs": prefs}
 
 
+@app.get("/api/seeds")
+def list_seeds():
+    return {"seeds": seed_catalog()}
+
+
+@app.get("/api/seeds/{name}")
+def get_seed_jpeg(name: str):
+    sid = name.removesuffix(".jpg").removesuffix(".jpeg")
+    data = seed_jpeg(sid)
+    if not data:
+        return JSONResponse({"error": "missing"}, status_code=404)
+    return Response(content=data, media_type="image/jpeg")
+
+
+@app.post("/api/session/reset-seed")
+def reset_seed():
+    return worker.request_seed_reset()
+
+
 @app.post("/api/session/reset-view")
 def reset_view():
     return worker.reset_orientation()
@@ -109,12 +133,25 @@ def reset_view():
 
 @app.post("/api/session/start")
 async def start_session(
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(None),
+    seed_id: str = Form(""),
     prompt: str = Form(""),
 ):
-    data = await image.read()
+    data: bytes | None = None
+    content_type = None
+    sid = seed_id.strip()
+    if image is not None and image.filename:
+        data = await image.read()
+        content_type = image.content_type
+    elif sid:
+        data = seed_jpeg(sid)
+        content_type = "image/jpeg"
+        if not data:
+            return JSONResponse({"error": f"unknown seed_id: {sid}"}, status_code=400)
+    else:
+        return JSONResponse({"error": "image or seed_id required"}, status_code=400)
     try:
-        validate_image(data, image.content_type)
+        validate_image(data, content_type)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     if not worker.ready:
@@ -195,6 +232,9 @@ async def stream(ws: WebSocket):
                 elif typ == "reset_orientation":
                     result = worker.reset_orientation()
                     await ws.send_text(json.dumps({"type": "view_reset", **result}))
+                elif typ == "reset_seed":
+                    result = worker.request_seed_reset()
+                    await ws.send_text(json.dumps({"type": "seed_reset", **result}))
                 elif typ == "intention":
                     intent = worker.add_intention(str(msg.get("text") or ""))
                     await ws.send_text(json.dumps({"type": "intention", **worker._intent_public(intent)}))

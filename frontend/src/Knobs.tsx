@@ -10,6 +10,7 @@ export type Prefs = {
   initial_note: string;
   world_prompt: string;
   model_id: string;
+  fps_lock: boolean;
 };
 
 export const PREF_FIELDS: {

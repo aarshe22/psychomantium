@@ -13,6 +13,7 @@ Both 1B configs ship `prompt_conditioning: null`, so `WorldEngine.set_prompt` ca
 | Mouse / arrows / nav ball | `CtrlInput.mouse` (dx, dy) velocity |
 | Cardinal look buttons | labeled Up/Down/Left/Right; same mouse tensor |
 | Reset view | inverse look until tracked yaw/pitch ~ 0; not a geometric camera |
+| Reset seed (U) | `reset()` + `append_frame(original seed)` |
 | Nav ball walk | optional WASD from stick angle |
 | Click viewport | pointer-lock mouse look |
 
@@ -38,16 +39,21 @@ See README. Resolution above 360p is **stream upscale**, not a 720p model swap. 
 
 Statuses: `received` → `submitted` (engine API called) → `visually_verified` only if the statistic above fires. Unmatched Speak lines stay `submitted` as world rules. `failed` is reserved for engine errors on the transform path.
 
-The Session **standing world prompt** (default: *There is a standard road grid, and buildings.*) is always composed into `set_prompt`. On this 1B checkpoint that call is skipped because `prompt_conditioning` is null; the text is still stored and shown. The seed photograph and movement remain the real world drivers.
+The Session **standing world prompt** is stored and shown. On this 1B checkpoint it is **not** DiT conditioning (`prompt_conditioning=null`). [Biome](https://github.com/Overworldai/Biome) uses the same honesty: its prompt notification resets the engine and ignores the text. Visual quality is the **start frame** (gallery or upload) plus movement. A warmup `gen_frame` runs after the seed so the first walk is not a compile hitch.
+
+## Scene authoring (not in this build)
+
+Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium does not install FLUX/VLM. Color-grade Speak lines (night/forest/day) remain pixel reseeds of the last frames, not language understanding. A future opt-in Compose profile could add FLUX reseed from the standing prompt without pretending `set_prompt` works.
 
 ## Known limitations
 
 - No permanent geography, physics, or object persistence (by design of the model).
 - Backtracking invents new scenery.
-- Live language conditioning is **not** implemented by these weights. Typing a sentence does not steer the DiT’s cross-attention.
+- Live language conditioning is **not** implemented by these weights. Typing a sentence does not steer the DiT’s cross-attention. Biome does not `set_prompt` on 1B either.
+- The seed image is the world prior. Gallery stills are original procedural first-person frames, not Overworld’s Biome pack.
 - Experimental transforms change the seed image, then the world model continues. That is not “the model understood night.”
+- The browser spreads each 4-frame batch across the last batch interval (EMA). That is display pacing, not extra inference.
+- `torch.compile` makes the first batches slow; a warmup `gen_frame` after seed absorbs some of that. Diagnostics report generation FPS from `gen_frame` wall time, separately from paced delivered FPS.
 - Click-to-enter-building cannot bind to a specific facade.
-- One session at a time. Disconnect waits `DISCONNECT_GRACE_SEC` (default 8s) then stops generation; the process and loaded weights remain.
-- `torch.compile` makes the first batches slow. Diagnostics report generation FPS from `gen_frame` wall time, separately from browser delivered FPS.
 - world_engine is GPL-3; the Waypoint weights are Apache-2.0.
 - Do not interpret imagery as a clinical or personal truth.

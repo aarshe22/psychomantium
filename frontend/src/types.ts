@@ -17,6 +17,8 @@ export type Stats = {
   frames?: number;
   vram?: { allocated_mb?: number; reserved_mb?: number; max_allocated_mb?: number };
   gpu_util_pct?: number | null;
+  fps_lock?: boolean;
+  max_fps?: number | null;
   session_active?: boolean;
   intentions?: Intention[];
   prompt_conditioning?: boolean;

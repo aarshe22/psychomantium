@@ -1,10 +1,11 @@
 import { FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import Accordion from "./Accordion";
+import { FramePacer, splitPackedFrames } from "./FramePacer";
 import Knobs, { Prefs } from "./Knobs";
 import NavBall from "./NavBall";
 import { KEY, Stats, Intention, wsUrl } from "./types";
 
-const MAGIC = 0x50535943;
+type GallerySeed = { id: string; label: string; caption: string; url: string; default?: boolean };
 
 const DEFAULT_PREFS: Prefs = {
   resolution: 360,
@@ -18,6 +19,7 @@ const DEFAULT_PREFS: Prefs = {
   initial_note: "An explorable dream",
   world_prompt: "There is a standard road grid, and buildings.",
   model_id: "Overworld/Waypoint-1.5-1B-360P",
+  fps_lock: true,
 };
 
 function parseJson(text: string, fallback: string) {
@@ -28,25 +30,11 @@ function parseJson(text: string, fallback: string) {
   }
 }
 
-function parseBinary(buf: ArrayBuffer, onFrame: (blob: Blob, seq: number) => void) {
-  const view = new DataView(buf);
-  let offset = 0;
-  while (offset + 28 <= buf.byteLength) {
-    const magic = view.getUint32(offset, true);
-    if (magic !== MAGIC) break;
-    const seq = view.getUint32(offset + 4, true);
-    const jpegLen = view.getUint32(offset + 8, true);
-    offset += 28;
-    if (offset + jpegLen > buf.byteLength) break;
-    const slice = buf.slice(offset, offset + jpegLen);
-    onFrame(new Blob([slice], { type: "image/jpeg" }), seq);
-    offset += jpegLen;
-  }
-}
-
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [seedId, setSeedId] = useState<string>("grid-street");
+  const [gallery, setGallery] = useState<GallerySeed[]>([]);
   const [prompt, setPrompt] = useState(DEFAULT_PREFS.initial_note);
   const [intentionText, setIntentionText] = useState("");
   const [intentions, setIntentions] = useState<Intention[]>([]);
@@ -80,6 +68,8 @@ export default function App() {
   const frameTimes = useRef<number[]>([]);
   const prefsTimer = useRef<number | null>(null);
   const resetViewRef = useRef<() => void>(() => undefined);
+  const resetSeedRef = useRef<() => void>(() => undefined);
+  const pacerRef = useRef<FramePacer | null>(null);
 
   useEffect(() => {
     try {
@@ -109,6 +99,21 @@ export default function App() {
           setPrefs({ ...DEFAULT_PREFS, ...body.prefs });
           if (body.prefs.initial_note) setPrompt(body.prefs.initial_note);
           setSaved(true);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/seeds")
+      .then((r) => r.json())
+      .then((body) => {
+        const seeds = (body.seeds || []) as GallerySeed[];
+        setGallery(seeds);
+        const def = seeds.find((s) => s.default) || seeds[0];
+        if (def) {
+          setSeedId(def.id);
+          setPreview(def.url);
         }
       })
       .catch(() => undefined);
@@ -200,6 +205,10 @@ export default function App() {
         e.preventDefault();
         if (!e.repeat) resetViewRef.current();
       }
+      if (e.code === "KeyU") {
+        e.preventDefault();
+        if (!e.repeat) resetSeedRef.current();
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === "KeyW") keysRef.current.delete(KEY.W);
@@ -245,23 +254,29 @@ export default function App() {
         if (msg.error) setError(msg.error);
         return;
       }
-      parseBinary(ev.data as ArrayBuffer, (blob) => {
-        const url = URL.createObjectURL(blob);
-        if (imgRef.current) imgRef.current.src = url;
-        if (lastUrl.current) URL.revokeObjectURL(lastUrl.current);
-        lastUrl.current = url;
-        const now = performance.now();
-        frameTimes.current.push(now);
-        frameTimes.current = frameTimes.current.filter((t) => now - t < 1000);
-        setDeliveredFps(frameTimes.current.length);
-      });
+      const packed = splitPackedFrames(ev.data as ArrayBuffer);
+      let pacer = pacerRef.current;
+      if (!pacer) {
+        pacer = new FramePacer((frame) => {
+          const url = URL.createObjectURL(frame.blob);
+          if (imgRef.current) imgRef.current.src = url;
+          if (lastUrl.current) URL.revokeObjectURL(lastUrl.current);
+          lastUrl.current = url;
+          const now = performance.now();
+          frameTimes.current.push(now);
+          frameTimes.current = frameTimes.current.filter((t) => now - t < 1000);
+          setDeliveredFps(frameTimes.current.length);
+        });
+        pacerRef.current = pacer;
+      }
+      pacer.ingest(packed);
     };
   }, []);
 
   async function enterDream(e: FormEvent) {
     e.preventDefault();
-    if (!file) {
-      setError("Choose a starting photograph.");
+    if (!file && !seedId) {
+      setError("Choose a starting photograph or a gallery seed.");
       return;
     }
     setError(null);
@@ -271,7 +286,8 @@ export default function App() {
       body: JSON.stringify({ persist: false, prefs: { ...prefs, initial_note: prompt } }),
     });
     const body = new FormData();
-    body.append("image", file);
+    if (file) body.append("image", file);
+    else body.append("seed_id", seedId);
     body.append("prompt", prompt);
     const res = await fetch("/api/session/start", { method: "POST", body });
     const data = parseJson(await res.text(), res.statusText);
@@ -286,6 +302,7 @@ export default function App() {
   async function stopDream() {
     setDreaming(false);
     clearKeys();
+    pacerRef.current?.reset();
     document.exitPointerLock();
     await fetch("/api/session/stop", { method: "POST" });
   }
@@ -345,8 +362,18 @@ export default function App() {
 
   function onPick(f: File | null) {
     setFile(f);
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(f ? URL.createObjectURL(f) : null);
+    if (preview && preview.startsWith("blob:")) URL.revokeObjectURL(preview);
+    if (f) {
+      setSeedId("");
+      setPreview(URL.createObjectURL(f));
+    }
+  }
+
+  function pickGallery(s: GallerySeed) {
+    setFile(null);
+    if (preview && preview.startsWith("blob:")) URL.revokeObjectURL(preview);
+    setSeedId(s.id);
+    setPreview(s.url);
   }
 
   function onViewportClick(ev: MouseEvent<HTMLDivElement>) {
@@ -403,6 +430,32 @@ export default function App() {
   }
   resetViewRef.current = resetView;
 
+  function resetSeed() {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "reset_seed" }));
+    } else {
+      fetch("/api/session/reset-seed", { method: "POST" });
+    }
+  }
+  resetSeedRef.current = resetSeed;
+
+  async function toggleFpsLock() {
+    const next = { ...prefs, fps_lock: !prefs.fps_lock };
+    setPrefs(next);
+    setSaved(false);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "prefs", prefs: next }));
+    }
+    const res = await fetch("/api/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persist: true, prefs: { ...next, initial_note: prompt } }),
+    });
+    if (res.ok) setSaved(true);
+  }
+
   function toggleAcc(id: string) {
     setOpenAcc((s) => ({ ...s, [id]: !s[id] }));
   }
@@ -454,8 +507,18 @@ export default function App() {
               {typeof stats.gpu_util_pct === "number" ? `${Math.round(stats.gpu_util_pct)}%` : "—"}
             </strong>
           </div>
-          <div className="pill metric" title="Generation frames per second">
-            <span className="metric-k">fps</span>
+          <button
+            type="button"
+            className={`pill metric toggle ${prefs.fps_lock ? "on" : ""}`}
+            title={
+              prefs.fps_lock
+                ? "30 fps cap on. Click to stream uncapped."
+                : "Uncapped. Click to lock 30 fps."
+            }
+            aria-pressed={prefs.fps_lock}
+            onClick={toggleFpsLock}
+          >
+            <span className="metric-k">{prefs.fps_lock ? "fps 30" : "fps"}</span>
             <strong>
               {dreaming && typeof stats.generation_fps === "number" && stats.generation_fps > 0
                 ? stats.generation_fps.toFixed(1)
@@ -463,7 +526,7 @@ export default function App() {
                   ? deliveredFps.toFixed(0)
                   : "—"}
             </strong>
-          </div>
+          </button>
           <div className={`pill ${ready ? "ok" : loadingModel ? "wait" : "bad"}`}>
             {ready ? "model ready" : loadingModel ? "loading weights" : "server only"}
           </div>
@@ -500,8 +563,25 @@ export default function App() {
           <div className="rail-body">
             <Accordion id="session" title="Session" open={!!openAcc.session} onToggle={toggleAcc}>
               <form onSubmit={enterDream}>
+                <p className="fine">Start frames are the real prior. The 1B world model continues from these pixels.</p>
+                {gallery.length > 0 && (
+                  <div className="seed-grid">
+                    {gallery.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`seed-card ${seedId === s.id && !file ? "on" : ""}`}
+                        onClick={() => pickGallery(s)}
+                        title={s.caption}
+                      >
+                        <img src={s.url} alt="" />
+                        <span>{s.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <label className="file">
-                  Starting photograph
+                  Or your photograph
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
@@ -535,13 +615,16 @@ export default function App() {
                   />
                 </label>
                 <div className="row">
-                  <button type="submit" disabled={!ready || !file}>
+                  <button type="submit" disabled={!ready || (!file && !seedId)}>
                     Enter dream
                   </button>
                   <button type="button" className="ghost" onClick={stopDream} disabled={!dreaming}>
                     Stop
                   </button>
                 </div>
+                <button type="button" className="ghost" onClick={resetSeed} disabled={!dreaming} title="U">
+                  Reset seed
+                </button>
               </form>
             </Accordion>
 
@@ -658,11 +741,11 @@ export default function App() {
             onContextMenu={(e) => e.preventDefault()}
           >
             <img ref={imgRef} alt="Dream viewport" />
-            {!dreaming && <div className="veil">Upload a photograph, then enter.</div>}
+            {!dreaming && <div className="veil">Pick a start frame, then enter.</div>}
           </div>
           <p className="help">
-            W walk forward · Z walk back · ← → turn · ↑ ↓ look · R reset to horizon · Space jump · click dream to
-            mouse-look · Esc releases lock
+            W walk forward · Z walk back · ← → turn · ↑ ↓ look · R reset to horizon · U reset seed · Space jump ·
+            click dream to mouse-look · Esc releases lock
           </p>
         </main>
       </div>

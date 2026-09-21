@@ -49,6 +49,15 @@ h1 {
 }
 .pill.metric .metric-k { color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .pill.metric strong { font-weight: 600; font-size: 0.86rem; color: var(--mist); }
+.pill.metric.toggle {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  min-width: 5.4rem;
+}
+.pill.metric.toggle.on { border-color: var(--ember); }
+.pill.metric.toggle.on .metric-k { color: var(--ember); }
 .pill.model-pick {
   display: flex;
   align-items: center;
@@ -162,6 +171,24 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
 .row { display: flex; gap: 0.5rem; }
 .row button { flex: 1; }
 .thumb { width: 100%; height: 44px; object-fit: cover; border: 1px solid var(--line); }
+.seed-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.28rem;
+  margin: 0.2rem 0 0.35rem;
+}
+.seed-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.15rem;
+  background: #0e0c10;
+  color: var(--mist);
+  font-size: 0.65rem;
+  text-align: left;
+}
+.seed-card img { width: 100%; height: 40px; object-fit: cover; }
+.seed-card.on { border-color: var(--ember); color: var(--ember); }
 .fine { font-size: 0.7rem; color: var(--dim); line-height: 1.3; }
 .fine code { color: var(--ember); }
 .intent { display: flex; flex-direction: column; gap: 0.25rem; }

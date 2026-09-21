@@ -147,6 +147,8 @@ class EngineWorker:
         self.frame_slot = threading.Condition()
         self.last_frames: Optional[np.ndarray] = None
         self.seed_preview: Optional[bytes] = None
+        self.original_seed: Optional[torch.Tensor] = None
+        self._seed_reset_pending = False
         self.prompt: str = ""
         self.generation_fps: float = 0.0
         self.last_gen_ms: float = 0.0
@@ -380,7 +382,8 @@ class EngineWorker:
             "vram": mem,
             "gpu_util_pct": gpu_util_pct(),
             "generation_fps": self.generation_fps,
-            "max_fps": config.MAX_FPS,
+            "max_fps": config.MAX_FPS if bool(self.prefs.get("fps_lock", True)) else None,
+            "fps_lock": bool(self.prefs.get("fps_lock", True)),
         }
 
     def set_controls(
@@ -576,6 +579,8 @@ class EngineWorker:
             self.reset_look = False
             self.smooth_mouse = [0.0, 0.0]
             self._prompt_dirty = True
+            self.original_seed = seed.detach().clone()
+            self._seed_reset_pending = False
         try:
             return self._gpu_call("start", seed)
         except Exception as exc:
@@ -592,11 +597,39 @@ class EngineWorker:
         engine.reset()
         decoded = engine.append_frame(seed)
         self.try_set_prompt()
-        frames = decoded.detach().to("cpu").numpy()
+        from world_engine import CtrlInput
+
+        try:
+            warm = engine.gen_frame(ctrl=CtrlInput())
+            frames = warm.detach().to("cpu").numpy()
+        except Exception:
+            frames = decoded.detach().to("cpu").numpy()
         self.last_frames = frames
         self._publish_batch(frames, gen_ms=0.0, kind="seed")
         self.frames_done += int(frames.shape[0])
         return {"ok": True, "prompt_applied": False, "reason": "prompt_conditioning is null on this checkpoint"}
+
+    def request_seed_reset(self) -> dict[str, Any]:
+        if not self.session_active or self.original_seed is None:
+            return {"ok": False, "error": "no seed in this session"}
+        self._seed_reset_pending = True
+        return {"ok": True}
+
+    def _reseed_on_gpu(self) -> None:
+        engine = self.engine
+        seed = self.original_seed
+        if engine is None or seed is None:
+            return
+        engine.reset()
+        decoded = engine.append_frame(seed)
+        self.try_set_prompt()
+        frames = decoded.detach().to("cpu").numpy()
+        self.last_frames = frames
+        self.view_yaw = 0.0
+        self.view_pitch = 0.0
+        self.reset_look = False
+        self.smooth_mouse = [0.0, 0.0]
+        self._publish_batch(frames, gen_ms=0.0, kind="seed")
 
     def stop_session(self) -> None:
         self.stop_event.set()
@@ -700,6 +733,8 @@ class EngineWorker:
             "frames": self.frames_done + len(frames),
             "vram": gpu_mem_mb(),
             "gpu_util_pct": gpu_util_pct(),
+            "fps_lock": bool(prefs.get("fps_lock", True)),
+            "max_fps": config.MAX_FPS if bool(prefs.get("fps_lock", True)) else None,
             "session_active": self.session_active,
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt_conditioning": self.prompt_supported,
@@ -750,6 +785,9 @@ class EngineWorker:
                 break
             try:
                 self.apply_pending_transforms()
+                if self._seed_reset_pending:
+                    self._reseed_on_gpu()
+                    self._seed_reset_pending = False
                 if self._prompt_dirty:
                     self.try_set_prompt()
                     self._prompt_dirty = False
@@ -775,12 +813,17 @@ class EngineWorker:
                     self.record_frames.extend([frames[i] for i in range(n)])
                 self._maybe_verify(frames)
                 elapsed = time.perf_counter() - t_cycle
-                min_interval = n / max(config.MAX_FPS, 1.0)
-                self.generation_fps = n / max(elapsed, min_interval)
-                self._publish_batch(frames, gen_ms=gen_ms, kind="generated")
-                remain = min_interval - (time.perf_counter() - t_cycle)
-                if remain > 0 and self.stop_event.wait(remain):
-                    break
+                fps_lock = bool(self.prefs.get("fps_lock", True))
+                if fps_lock:
+                    min_interval = n / max(config.MAX_FPS, 1.0)
+                    self.generation_fps = n / max(elapsed, min_interval)
+                    self._publish_batch(frames, gen_ms=gen_ms, kind="generated")
+                    remain = min_interval - (time.perf_counter() - t_cycle)
+                    if remain > 0 and self.stop_event.wait(remain):
+                        break
+                else:
+                    self.generation_fps = n / max(elapsed, 1e-6)
+                    self._publish_batch(frames, gen_ms=gen_ms, kind="generated")
             except Exception as exc:
                 self.last_error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
                 if "CUDA" in self.last_error or "AcceleratorError" in type(exc).__name__:
