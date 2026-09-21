@@ -7,6 +7,7 @@ QUANT = os.environ.get("WAYPOINT_QUANT") or None
 DEVICE = os.environ.get("WAYPOINT_DEVICE", "cuda")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/data/outputs"))
 PREFS_DIR = Path(os.environ.get("PREFS_DIR", "/data/preferences"))
+SEEDS_DIR = Path(os.environ.get("SEEDS_DIR", "/data/seeds"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "78"))
 DISCONNECT_GRACE_SEC = float(os.environ.get("DISCONNECT_GRACE_SEC", "8"))

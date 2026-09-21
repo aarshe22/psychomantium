@@ -188,7 +188,7 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
   font-size: 0.65rem;
   text-align: left;
 }
-.seed-card img { width: 100%; height: 40px; object-fit: cover; }
+.seed-card img { width: 100%; height: 64px; object-fit: cover; }
 .seed-card.on { border-color: var(--ember); color: var(--ember); }
 .fine { font-size: 0.7rem; color: var(--dim); line-height: 1.3; }
 .fine code { color: var(--ember); }

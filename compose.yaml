@@ -42,6 +42,7 @@ services:
       <<: *cache-env
       OUTPUT_DIR: /data/outputs
       PREFS_DIR: /data/preferences
+      SEEDS_DIR: /data/seeds
       WAYPOINT_MODEL: ${WAYPOINT_MODEL:-Overworld/Waypoint-1.5-1B-360P}
       WAYPOINT_QUANT: ${WAYPOINT_QUANT:-}
       SCENE_AUTHORING: ${SCENE_AUTHORING:-1}
@@ -60,6 +61,7 @@ services:
       - ./data/xdg-cache:/root/.cache
       - ./data/outputs:/data/outputs
       - ./data/preferences:/data/preferences
+      - ./data/seeds:/data/seeds
     shm_size: "2gb"
     restart: unless-stopped
     healthcheck:

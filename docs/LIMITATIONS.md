@@ -41,16 +41,16 @@ Statuses: `received` → `submitted` (engine API called) → `visually_verified`
 
 The Session **standing world prompt** is stored and shown. On this 1B checkpoint it is **not** DiT conditioning (`prompt_conditioning=null`). [Biome](https://github.com/Overworldai/Biome) uses the same honesty: its prompt notification resets the engine and ignores the text. Visual quality is the **start frame** (gallery or upload) plus movement. A warmup `gen_frame` runs after the seed so the first walk is not a compile hitch.
 
-## Scene authoring (not in this build)
+## Scene authoring
 
-Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium does not install FLUX/VLM. Color-grade Speak lines (night/forest/day) remain pixel reseeds of the last frames, not language understanding. A future opt-in Compose profile could add FLUX reseed from the standing prompt without pretending `set_prompt` works.
+Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium can paint a start frame with Klein from the standing prompt (`POST /api/seeds/paint`) and, with **InPaint** on, refine the current view while you stand still. Color-grade Speak lines (night/forest/day) remain pixel reseeds of the last frames, not language understanding.
 
 ## Known limitations
 
 - No permanent geography, physics, or object persistence (by design of the model).
 - Backtracking invents new scenery.
 - Live language conditioning is **not** implemented by these weights. Typing a sentence does not steer the DiT’s cross-attention. Biome does not `set_prompt` on 1B either.
-- The seed image is the world prior. Gallery stills are original procedural first-person frames, not Overworld’s Biome pack.
+- The seed image is the world prior. Gallery stills are Overworld's public photoreal Space starters (cached on the host) or Klein-painted frames, plus user upload. Schematic drawings are out of distribution.
 - Experimental transforms change the seed image, then the world model continues. That is not “the model understood night.”
 - The browser spreads each 4-frame batch across the last batch interval (EMA). That is display pacing, not extra inference.
 - `torch.compile` makes the first batches slow; a warmup `gen_frame` after seed absorbs some of that. Diagnostics report generation FPS from `gen_frame` wall time, separately from paced delivered FPS.

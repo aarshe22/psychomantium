@@ -344,6 +344,24 @@ class SceneAuthoring:
         )
         return out.images[0]
 
+    def generate_from_text(self, user_request: str, size_wh: tuple[int, int]) -> tuple[Image.Image, str]:
+        """Paint a first-person seed with Klein. Uses the user's words directly (no VLM)."""
+        if self.pipeline is None:
+            raise AuthoringNotReady(self.error or "Klein pipeline not loaded")
+        w, h = size_wh
+        th, tw = self._align(h, w)
+        text = (user_request or "").strip() or "an explorable first-person world"
+        prompt = (
+            "Photoreal first-person screenshot, eye-level, 16:9, natural lighting, "
+            "detailed materials, coherent environment. "
+            f"{text}. "
+            "A handheld object in the bottom-right of the frame, FPS view. "
+            "No text overlay, no UI chrome."
+        )
+        blank = Image.new("RGB", (tw, th), (255, 255, 255))
+        result = self.run_klein(blank, prompt, th, tw)
+        return result.resize((w, h), Image.Resampling.LANCZOS), prompt
+
     def generate(self, user_request: str, size_wh: tuple[int, int]) -> tuple[Image.Image, str]:
         if not self.ready:
             raise AuthoringNotReady(self.error or "authoring not ready")

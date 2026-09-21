@@ -5,7 +5,7 @@ import Knobs, { Prefs } from "./Knobs";
 import NavBall from "./NavBall";
 import { KEY, Stats, Intention, wsUrl } from "./types";
 
-type GallerySeed = { id: string; label: string; caption: string; url: string; default?: boolean };
+type GallerySeed = { id: string; label: string; caption: string; url: string; default?: boolean; source?: string };
 
 const DEFAULT_PREFS: Prefs = {
   resolution: 360,
@@ -34,8 +34,9 @@ function parseJson(text: string, fallback: string) {
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [seedId, setSeedId] = useState<string>("grid-street");
+  const [seedId, setSeedId] = useState<string>("");
   const [gallery, setGallery] = useState<GallerySeed[]>([]);
+  const [painting, setPainting] = useState(false);
   const [prompt, setPrompt] = useState(DEFAULT_PREFS.initial_note);
   const [intentionText, setIntentionText] = useState("");
   const [intentions, setIntentions] = useState<Intention[]>([]);
@@ -111,14 +112,15 @@ export default function App() {
       .then((body) => {
         const seeds = (body.seeds || []) as GallerySeed[];
         setGallery(seeds);
-        const def = seeds.find((s) => s.default) || seeds[0];
-        if (def) {
-          setSeedId(def.id);
-          setPreview(def.url);
-        }
+        setSeedId((current) => {
+          if (current) return current;
+          const def = seeds.find((s) => s.default) || seeds[0];
+          if (def) setPreview(def.url);
+          return def ? def.id : "";
+        });
       })
       .catch(() => undefined);
-  }, []);
+  }, [ready]);
 
   useEffect(() => {
     let stop = false;
@@ -377,6 +379,34 @@ export default function App() {
     setPreview(s.url);
   }
 
+  async function paintFromPrompt() {
+    const text = [prefs.world_prompt, prompt].filter(Boolean).join(". ");
+    setError(null);
+    setPainting(true);
+    try {
+      const res = await fetch("/api/seeds/paint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text }),
+      });
+      const data = parseJson(await res.text(), res.statusText) as {
+        error?: string;
+        seed?: GallerySeed;
+      };
+      if (!res.ok || !data.seed) {
+        setError(data.error || `Paint failed (${res.status})`);
+        return;
+      }
+      const seed = { ...data.seed, url: data.seed.url || `/api/seeds/${data.seed.id}.jpg` };
+      setGallery((g) => [seed, ...g.filter((s) => s.id !== seed.id)]);
+      setFile(null);
+      setSeedId(seed.id);
+      setPreview(`${seed.url}?t=${Date.now()}`);
+    } finally {
+      setPainting(false);
+    }
+  }
+
   function onViewportClick(ev: MouseEvent<HTMLDivElement>) {
     const el = ev.currentTarget;
     if (!dreaming) return;
@@ -608,25 +638,12 @@ export default function App() {
           <div className="rail-body">
             <Accordion id="session" title="Session" open={!!openAcc.session} onToggle={toggleAcc}>
               <form onSubmit={enterDream}>
-                <p className="fine">Start frames are the real prior. The 1B world model continues from these pixels.</p>
-                {gallery.length > 0 && (
-                  <div className="seed-grid">
-                    {gallery.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className={`seed-card ${seedId === s.id && !file ? "on" : ""}`}
-                        onClick={() => pickGallery(s)}
-                        title={s.caption}
-                      >
-                        <img src={s.url} alt="" />
-                        <span>{s.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <p className="fine">
+                  Waypoint continues from a <strong>photoreal first-person still</strong>. Upload a photograph,
+                  pick an Overworld starter, or paint one with Klein from the standing prompt.
+                </p>
                 <label className="file">
-                  Or your photograph
+                  Your photograph (best prior)
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
@@ -659,8 +676,36 @@ export default function App() {
                     placeholder="Optional session note. Combined with the standing prompt."
                   />
                 </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={paintFromPrompt}
+                  disabled={painting || dreaming}
+                  title="FLUX.2 Klein paints a first-person JPEG from the standing prompt, then you enter from that seed."
+                >
+                  {painting ? "Painting seed…" : "Paint seed from prompt"}
+                </button>
+                {gallery.length > 0 && (
+                  <>
+                    <p className="fine">Overworld photoreal starters</p>
+                    <div className="seed-grid">
+                    {gallery.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`seed-card ${seedId === s.id && !file ? "on" : ""}`}
+                        onClick={() => pickGallery(s)}
+                        title={s.caption}
+                      >
+                        <img src={s.url} alt={s.label} />
+                        <span>{s.label}</span>
+                      </button>
+                    ))}
+                    </div>
+                  </>
+                )}
                 <div className="row">
-                  <button type="submit" disabled={!ready || (!file && !seedId)}>
+                  <button type="submit" disabled={!ready || (!file && !seedId) || painting}>
                     Enter dream
                   </button>
                   <button type="button" className="ghost" onClick={stopDream} disabled={!dreaming}>

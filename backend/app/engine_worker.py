@@ -23,6 +23,7 @@ from . import config
 from .intentions import Intention, parse_intention
 from .prefs import clamp_prefs, load_prefs, output_size, save_prefs
 from .scene_authoring import authoring
+from .seeds import save_painted
 
 FRAME_HEADER_MAGIC = 0x50535943  # 'PSYC'
 
@@ -207,6 +208,9 @@ class EngineWorker:
                         self._loop()
                     finally:
                         self.loop_idle.set()
+                elif op == "paint":
+                    box["result"] = self._paint_on_gpu(*args)
+                    done.set()
                 else:
                     raise RuntimeError(f"unknown gpu op {op}")
             except Exception as exc:
@@ -568,6 +572,29 @@ class EngineWorker:
         self.view_yaw = float(max(-12.0, min(12.0, self.view_yaw)))
         self.view_pitch = float(max(-6.0, min(6.0, self.view_pitch)))
         return CtrlInput(button=buttons, mouse=(mx, my), scroll_wheel=0)
+
+    def paint_seed(self, text: str) -> dict[str, Any]:
+        if self.session_active:
+            return {"ok": False, "error": "stop the dream before painting a new start frame"}
+        if not self.loop_idle.is_set():
+            return {"ok": False, "error": "GPU busy"}
+        prompt = (text or "").strip()
+        if not prompt:
+            prompt = self.composed_prompt()
+        try:
+            return self._gpu_call("paint", prompt)
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _paint_on_gpu(self, text: str) -> dict[str, Any]:
+        if authoring.pipeline is None:
+            authoring.load()
+        pil, klein_prompt = authoring.generate_from_text(text, self.frame_size)
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=92)
+        jpeg = buf.getvalue()
+        meta = save_painted(jpeg, label="Klein painted")
+        return {"ok": True, "seed": meta, "klein_prompt": klein_prompt}
 
     def start_session(self, image_bytes: bytes, prompt: str = "") -> dict[str, Any]:
         if not self.ready or self.engine is None:

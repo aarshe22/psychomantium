@@ -68,7 +68,7 @@ Weights are **not** stored in the image. Host directories are bind-mounted; `doc
 | `data/torch-cache/` | `/data/torch-cache` | `torch.compile` inductor/triton + Torch Hub |
 | `data/xdg-cache/` | `/data/xdg-cache` and `/root/.cache` | Catch-all if a library ignores `HF_HOME` |
 | `data/outputs/` | `/data/outputs` | Snapshots / probe movies |
-| `data/preferences/` | `/data/preferences` | `preferences.json` |
+| `data/seeds/` | `/data/seeds` | Cached Overworld starter JPEGs and Klein-painted seeds |
 
 Do not delete `data/hf-cache/` unless you intend to re-download tens of gigabytes.
 
@@ -98,7 +98,7 @@ Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B`
 - **R** reset orientation to the horizon
 - **U** reset to the original seed (`engine.reset()` + `append_frame`)
 - **Space** jump · click the viewport for pointer-lock mouse look
-- Session: gallery of original first-person start frames, or your photograph
+- Session: upload a photograph (best prior), public Overworld photoreal starters, or paint a seed with FLUX.2 Klein from the standing prompt
 - Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
 - Movement keys are ignored while the intention/prompt fields are focused
 - **Enter** in the intention field submits
@@ -118,7 +118,7 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 | Motion smoothing | Exponential blend on look |
 | Dream sharpness | Remaps the 4-step noise schedule (same step count; compiled graph stays valid) |
 
-**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT (Biome’s 1B path does not call it either). The start frame and movement still drive the world. [Overworld Biome](https://github.com/Overworldai/Biome) gets “prompted” worlds by running **FLUX + VLM to paint a new seed image**, which this build does not load.
+**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. Use **Paint seed from prompt** (FLUX.2 Klein) or **InPaint** while idle so language becomes pixels, then Waypoint continues from that seed.
 
 The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch interval (EMA), instead of flashing all four at once. Click the FPS badge to cap at 30 or uncap.
 

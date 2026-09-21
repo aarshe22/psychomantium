@@ -112,6 +112,18 @@ def list_seeds():
     return {"seeds": seed_catalog()}
 
 
+@app.post("/api/seeds/paint")
+async def paint_seed(payload: dict[str, Any]):
+    text = str(payload.get("prompt") or payload.get("text") or "").strip()
+    if len(text) > 500:
+        return JSONResponse({"error": "too long"}, status_code=400)
+    result = await asyncio.get_event_loop().run_in_executor(None, worker.paint_seed, text)
+    if not result.get("ok"):
+        status = 409 if "stop the dream" in str(result.get("error") or "") else 500
+        return JSONResponse(result, status_code=status)
+    return result
+
+
 @app.get("/api/seeds/{name}")
 def get_seed_jpeg(name: str):
     sid = name.removesuffix(".jpg").removesuffix(".jpeg")
