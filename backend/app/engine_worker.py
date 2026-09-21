@@ -397,13 +397,27 @@ class EngineWorker:
 
     def _load_engine(self) -> None:
         t0 = time.perf_counter()
-        # Blackwell + world_engine's torch.compile (triton cudagraphs) indexes
-        # the 5-sigma Euler ladder out of range (device-side assert `tmp21 < 5`),
-        # kills the worker, and 502/503s the UI so WASD never reaches a live loop.
-        os.environ["TORCH_COMPILE_DISABLE"] = "1"
-        torch._dynamo.config.disable = True
+        # world_engine's @torch.compile uses triton cudagraphs. Those graphs
+        # bake the 5-step Euler ladder and blow up (`tmp21 < 5`) after a
+        # checkpoint switch or a sigma rewrite. Disabling compile entirely
+        # falls back to unfused flex_attention, which PyTorch warns can
+        # produce incorrect frames. Keep compile, drop cudagraphs, isolate
+        # the inductor cache per checkpoint, and reset dynamo on reload.
+        os.environ.pop("TORCH_COMPILE_DISABLE", None)
+        slug = str(self.model_id).replace("/", "--")
+        os.environ["TORCHINDUCTOR_CACHE_DIR"] = f"/data/torch-cache/inductor/{slug}"
+        os.environ["TRITON_CACHE_DIR"] = f"/data/torch-cache/triton/{slug}"
+        torch._dynamo.config.disable = False
+        try:
+            torch.compiler.reset()
+        except Exception:
+            pass
         import world_engine.world_engine as we
         from world_engine import WorldEngine
+
+        we.COMPILE_OPTIONS["triton.cudagraphs"] = False
+        we.COMPILE_OPTIONS["max_autotune"] = False
+        we.COMPILE_OPTIONS["coordinate_descent_tuning"] = False
 
         self._unload_engine()
         self._set_bootstrap(
