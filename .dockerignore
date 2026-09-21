@@ -1,0 +1,6 @@
+data
+.git
+docs
+*.md
+.env
+.write_test

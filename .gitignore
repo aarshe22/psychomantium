@@ -1,0 +1,15 @@
+data/
+outputs/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.mp4
+*.webm
+.DS_Store
+frontend/node_modules/
+frontend/dist/
+backend/.pytest_cache/
+.write_test

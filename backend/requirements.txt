@@ -1,0 +1,13 @@
+# Application pins. world_engine pulls torch==2.11.0, transformers, diffusers, etc.
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+python-multipart==0.0.20
+numpy==2.2.6
+pillow==11.3.0
+opencv-python-headless==4.12.0.88
+imageio==2.37.2
+imageio-ffmpeg==0.6.0
+psutil==7.1.0
+pydantic==2.12.4
+# Pinned engine revision (GPL-3). Installed from git in the Dockerfile after torch.
+# world_engine @ git+https://github.com/Overworldai/world_engine.git@b3f1e725b222679a517632918cc78bba0c9fa433

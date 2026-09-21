@@ -1,0 +1,100 @@
+name: psychomantium
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
+    image: psychomantium-backend:local
+    gpus: all
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8791:8791"
+      - "10.1.1.100:8791:8791"
+    environment:
+      HF_HOME: /data/hf-cache
+      HUGGINGFACE_HUB_CACHE: /data/hf-cache/hub
+      OUTPUT_DIR: /data/outputs
+      PREFS_DIR: /data/preferences
+      TORCHINDUCTOR_CACHE_DIR: /data/torch-cache/inductor
+      TRITON_CACHE_DIR: /data/torch-cache/triton
+      WAYPOINT_MODEL: ${WAYPOINT_MODEL:-Overworld/Waypoint-1.5-1B-360P}
+      WAYPOINT_QUANT: ${WAYPOINT_QUANT:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      # Host proxy 10.1.1.100 is not reachable from the Docker bridge; use the gateway.
+      HTTP_PROXY: http://host.docker.internal:3128
+      HTTPS_PROXY: http://host.docker.internal:3128
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,backend}
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - ./backend:/app
+      - ./data/hf-cache:/data/hf-cache
+      - ./data/outputs:/data/outputs
+      - ./data/torch-cache:/data/torch-cache
+      - ./data/preferences:/data/preferences
+    shm_size: "2gb"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
+    image: psychomantium-frontend:local
+    ports:
+      - "127.0.0.1:8790:80"
+      - "10.1.1.100:8790:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  probe:
+    profiles: ["probe"]
+    image: psychomantium-backend:local
+    gpus: all
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HF_HOME: /data/hf-cache
+      HUGGINGFACE_HUB_CACHE: /data/hf-cache/hub
+      OUTPUT_DIR: /data/outputs
+      TORCHINDUCTOR_CACHE_DIR: /data/torch-cache/inductor
+      TRITON_CACHE_DIR: /data/torch-cache/triton
+      WAYPOINT_MODEL: ${WAYPOINT_MODEL:-Overworld/Waypoint-1.5-1B-360P}
+      WAYPOINT_QUANT: ${WAYPOINT_QUANT:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HTTP_PROXY: http://host.docker.internal:3128
+      HTTPS_PROXY: http://host.docker.internal:3128
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - ./data/hf-cache:/data/hf-cache
+      - ./data/outputs:/data/outputs
+      - ./data/torch-cache:/data/torch-cache
+    shm_size: "2gb"
+    working_dir: /app
+    command: ["python", "scripts/inference_probe.py"]
