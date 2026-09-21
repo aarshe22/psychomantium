@@ -1,14 +1,17 @@
 """Photoreal start frames for Waypoint.
 
-The 1B DiT continues from pixels. Schematic drawings are out of distribution.
-Gallery stills are Overworld's public Space starters (cached on the host) plus
-optional Klein-painted seeds from the standing prompt. User upload stays first-class.
+The 1B DiT continues from pixels. Gallery stills are royalty-free eye-level
+urban and rural photographs (Wikimedia Commons / StockSnap), plus optional
+Klein-painted seeds. Overworld FPS stills are not listed: they show hands
+and weapons. User upload stays first-class.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -17,83 +20,141 @@ from PIL import Image
 from . import config
 
 SEEDS_DIR = config.SEEDS_DIR
-OVERWORLD_DIR = SEEDS_DIR / "overworld"
+CC0_DIR = SEEDS_DIR / "cc0"
 PAINTED_DIR = SEEDS_DIR / "painted"
+USER_AGENT = "Psychomantium/0.1 (https://github.com/aarshe22/psychomantium)"
 
-# Official demo stills from the Waypoint HF Space (same pack as the model card).
+# Curated empty streets/paths. No first-person hands or weapons.
 STARTERS: list[dict[str, str]] = [
     {
-        "id": "ow-starter-18",
-        "file": "starter_18.png",
-        "label": "Official starter",
-        "caption": "Public Overworld still used on the Waypoint-1.5 model card.",
+        "id": "urban-ghent",
+        "label": "Tree boulevard",
+        "caption": "Empty Ghent avenue. CC BY-SA 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Empty_street_in_Ghent.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Empty_street_in_Ghent.jpg",
+        "license": "CC BY-SA 4.0",
         "default": "1",
     },
     {
-        "id": "ow-starter-14",
-        "file": "starter_14.png",
-        "label": "Starter 14",
-        "caption": "Public photoreal first-person still from Overworld's Waypoint Space.",
+        "id": "urban-bergama",
+        "label": "Cobblestone street",
+        "caption": "Empty Bergama street. CC BY-SA 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/5/58/Empty_street_during_the_coronavirus_pandemic_in_Bergama%2C_%C4%B0zmir.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Empty_street_during_the_coronavirus_pandemic_in_Bergama,_%C4%B0zmir.jpg",
+        "license": "CC BY-SA 4.0",
     },
     {
-        "id": "ow-starter-22",
-        "file": "starter_22.png",
-        "label": "Starter 22",
-        "caption": "Public photoreal first-person still from Overworld's Waypoint Space.",
+        "id": "urban-moscow",
+        "label": "Plaza morning",
+        "caption": "Empty Nikolskaya Street, Moscow. CC BY 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Moscow_-_2025_-_empty_Nikolskaya_Street_in_the_morning.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Moscow_-_2025_-_empty_Nikolskaya_Street_in_the_morning.jpg",
+        "license": "CC BY 4.0",
     },
     {
-        "id": "ow-starter-21",
-        "file": "starter_21.png",
-        "label": "Starter 21",
-        "caption": "Public photoreal first-person still from Overworld's Waypoint Space.",
+        "id": "urban-street",
+        "label": "Snow street",
+        "caption": "Snowed-in city street at night. CC BY 2.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/2/27/Empty_Street_%2850903495093%29.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Empty_Street_(50903495093).jpg",
+        "license": "CC BY 2.0",
     },
     {
-        "id": "ow-starter-9",
-        "file": "starter_9.png",
-        "label": "Starter 9",
-        "caption": "Public photoreal first-person still from Overworld's Waypoint Space.",
+        "id": "urban-london",
+        "label": "Regent Street",
+        "caption": "Empty Regent Street, London. CC BY-SA 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/e/ef/Regent_Street_Central_London_UK_COVID_19_Empty_Street.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Regent_Street_Central_London_UK_COVID_19_Empty_Street.jpg",
+        "license": "CC BY-SA 4.0",
+    },
+    {
+        "id": "rural-fog",
+        "label": "Foggy farm road",
+        "caption": "Rural dirt road in fog, Texas. CC BY-SA 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Rural_dirt_road_and_trees_in_the_fog_in_Texas.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Rural_dirt_road_and_trees_in_the_fog_in_Texas.jpg",
+        "license": "CC BY-SA 4.0",
+    },
+    {
+        "id": "rural-forest",
+        "label": "Forest path",
+        "caption": "Deciduous forest path, Finland. CC BY-SA 4.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/7/72/Forest_path_through_a_deciduous_forest_in_spring%2C_Finland.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Forest_path_through_a_deciduous_forest_in_spring,_Finland.jpg",
+        "license": "CC BY-SA 4.0",
+    },
+    {
+        "id": "rural-dales",
+        "label": "Dales road",
+        "caption": "Yorkshire Dales country road. CC BY-SA 3.0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/0/06/2014_Yorkshire_Dales_country_road_Swaledale_Askrigg.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:2014_Yorkshire_Dales_country_road_Swaledale_Askrigg.jpg",
+        "license": "CC BY-SA 3.0",
+    },
+    {
+        "id": "rural-lane",
+        "label": "Dirt lane",
+        "caption": "Rural dirt road with trees. CC0, Wikimedia Commons.",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/5/5b/Rural_dirt_road_with_trees_and_stone_fencing.jpg",
+        "page": "https://commons.wikimedia.org/wiki/File:Rural_dirt_road_with_trees_and_stone_fencing.jpg",
+        "license": "CC0",
+    },
+    {
+        "id": "rural-stocksnap",
+        "label": "Open highway",
+        "caption": "Empty rural highway. CC0, Dave Meier / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/DC980ABE32.jpg",
+        "page": "https://stocksnap.io/photo/road-rural-DC980ABE32",
+        "license": "CC0",
     },
 ]
 
-SPACE_REPO = "Overworld/waypoint-1-small"
 
-
-def _to_jpeg(src: Path | bytes, quality: int = 90) -> bytes:
-    if isinstance(src, Path):
-        img = Image.open(src)
+def _crop_16x9(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    target = 16 / 9
+    if w / h > target:
+        nw = int(h * target)
+        x = (w - nw) // 2
+        img = img.crop((x, 0, x + nw, h))
     else:
-        img = Image.open(io.BytesIO(src))
-    img = img.convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
-    return buf.getvalue()
+        nh = int(w / target)
+        y = max(0, (h - nh) // 3)  # bias slightly up (eye-level, less sky-only)
+        img = img.crop((0, y, w, y + nh))
+    if img.width > 1600:
+        nh = int(img.height * 1600 / img.width)
+        img = img.resize((1600, nh), Image.Resampling.LANCZOS)
+    return img
 
 
 def _cache_starters() -> None:
-    OVERWORLD_DIR.mkdir(parents=True, exist_ok=True)
-    from huggingface_hub import hf_hub_download
-
+    CC0_DIR.mkdir(parents=True, exist_ok=True)
     for item in STARTERS:
-        dest = OVERWORLD_DIR / f"{item['id']}.jpg"
+        dest = CC0_DIR / f"{item['id']}.jpg"
         if dest.is_file() and dest.stat().st_size > 20_000:
             continue
-        raw = Path(
-            hf_hub_download(
-                repo_id=SPACE_REPO,
-                filename=item["file"],
-                repo_type="space",
-            )
-        )
-        dest.write_bytes(_to_jpeg(raw))
+        req = urllib.request.Request(item["url"], headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read()
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        out = _crop_16x9(img)
+        buf = io.BytesIO()
+        out.save(buf, format="JPEG", quality=90)
+        dest.write_bytes(buf.getvalue())
+    meta = [
+        {k: v for k, v in item.items() if k != "url"}
+        for item in STARTERS
+    ]
+    (CC0_DIR / "manifest.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 
 def ensure_gallery() -> Path:
     SEEDS_DIR.mkdir(parents=True, exist_ok=True)
     PAINTED_DIR.mkdir(parents=True, exist_ok=True)
+    CC0_DIR.mkdir(parents=True, exist_ok=True)
     try:
         _cache_starters()
     except Exception:
-        # Catalog still lists painted seeds / upload; starters appear when HF is reachable.
         pass
     return SEEDS_DIR
 
@@ -117,7 +178,7 @@ def catalog() -> list[dict[str, Any]]:
     ensure_gallery()
     out: list[dict[str, Any]] = []
     for item in STARTERS:
-        path = OVERWORLD_DIR / f"{item['id']}.jpg"
+        path = CC0_DIR / f"{item['id']}.jpg"
         if not path.is_file():
             continue
         out.append(
@@ -126,7 +187,8 @@ def catalog() -> list[dict[str, Any]]:
                 "label": item["label"],
                 "caption": item["caption"],
                 "url": f"/api/seeds/{item['id']}.jpg",
-                "source": "overworld",
+                "source": "cc0",
+                "license": item.get("license"),
                 "default": bool(item.get("default")),
             }
         )
@@ -148,7 +210,7 @@ def catalog() -> list[dict[str, Any]]:
 
 def jpeg_for(seed_id: str) -> bytes | None:
     ensure_gallery()
-    for folder in (OVERWORLD_DIR, PAINTED_DIR):
+    for folder in (CC0_DIR, PAINTED_DIR):
         path = folder / f"{seed_id}.jpg"
         if path.is_file():
             return path.read_bytes()

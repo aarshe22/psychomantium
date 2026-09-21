@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
@@ -68,11 +68,17 @@ POLICY = (
     "If the request is only disallowed content, call reject_request."
 )
 
+EXPLORATION_GUARD = (
+    "Unarmed first-person exploration only. Empty hands. "
+    "No weapons, firearms, hammers, swords, tools, or any held object in the lower corners. "
+    "No HUD, no text overlay."
+)
+
 EDIT_SYSTEM = (
     "You write short image-edit instructions for FLUX.2 Klein. "
     "The editor gets a first-person reference frame plus your instruction. "
     "Describe what to change, not the whole scene. Add elements unless told to replace. "
-    "Scene objects sit in the world; handheld items go in a right hand at the bottom-right, FPS-style. "
+    "This is a peaceful exploration sim: empty unarmed hands; never place weapons or tools in frame. "
     f"{POLICY} "
     "End with 'Keep everything else unchanged.' "
     "Think briefly, then call submit_edit_instruction."
@@ -81,7 +87,7 @@ EDIT_SYSTEM = (
 GENERATE_SYSTEM = (
     "You write a detailed text-to-image prompt for FLUX.2 Klein. "
     "The image is a first-person starting frame for an explorable world. "
-    "Describe setting, lighting, atmosphere, and a handheld object in the bottom-right. "
+    "Describe setting, lighting, and atmosphere. Empty unarmed hands. No weapons or held tools. "
     f"{POLICY} "
     "Call submit_edit_instruction with the full prompt."
 )
@@ -332,16 +338,42 @@ class SceneAuthoring:
     def _align(h: int, w: int) -> tuple[int, int]:
         return max(16, h // 16 * 16), max(16, w // 16 * 16)
 
-    def run_klein(self, image: Image.Image, prompt: str, height: int, width: int) -> Image.Image:
+    def run_klein(
+        self,
+        image: Image.Image,
+        prompt: str,
+        height: int,
+        width: int,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> Image.Image:
         if self.pipeline is None:
             raise AuthoringNotReady("Klein pipeline not loaded")
-        out = self.pipeline(
-            image=image,
-            prompt=prompt,
-            num_inference_steps=KLEIN_STEPS,
-            height=height,
-            width=width,
-        )
+        steps = max(int(KLEIN_STEPS), 1)
+
+        def _cb(pipe, step, timestep, callback_kwargs):
+            if on_progress is not None:
+                try:
+                    on_progress(min(1.0, (int(step) + 1) / steps))
+                except Exception:
+                    pass
+            return callback_kwargs
+
+        kwargs: dict[str, Any] = {
+            "image": image,
+            "prompt": prompt,
+            "num_inference_steps": steps,
+            "height": height,
+            "width": width,
+        }
+        if on_progress is not None:
+            kwargs["callback_on_step_end"] = _cb
+        try:
+            out = self.pipeline(**kwargs)
+        except TypeError:
+            kwargs.pop("callback_on_step_end", None)
+            out = self.pipeline(**kwargs)
+        if on_progress is not None:
+            on_progress(1.0)
         return out.images[0]
 
     def generate_from_text(self, user_request: str, size_wh: tuple[int, int]) -> tuple[Image.Image, str]:
@@ -355,8 +387,7 @@ class SceneAuthoring:
             "Photoreal first-person screenshot, eye-level, 16:9, natural lighting, "
             "detailed materials, coherent environment. "
             f"{text}. "
-            "A handheld object in the bottom-right of the frame, FPS view. "
-            "No text overlay, no UI chrome."
+            f"{EXPLORATION_GUARD}"
         )
         blank = Image.new("RGB", (tw, th), (255, 255, 255))
         result = self.run_klein(blank, prompt, th, tw)
@@ -385,8 +416,9 @@ class SceneAuthoring:
 
     DETAIL_PROMPT = (
         "Increase photorealistic detail, texture, materials, and lighting of this first-person view. "
-        "Keep the same camera angle, composition, objects, and layout. "
-        "Do not add or remove subjects. Keep everything else unchanged."
+        "Keep the same camera angle, composition, and layout. "
+        "Empty unarmed hands. Remove any weapon, hammer, tool, or held object. "
+        "Do not add subjects. Keep everything else unchanged."
     )
 
     def refine_frame(
@@ -394,6 +426,7 @@ class SceneAuthoring:
         frame: np.ndarray,
         size_wh: tuple[int, int],
         user_request: str | None = None,
+        on_progress: Callable[[float], None] | None = None,
     ) -> tuple[Image.Image, str]:
         """Klein edit of the current view. No VLM.
 
@@ -412,12 +445,11 @@ class SceneAuthoring:
                 "Photoreal first-person screenshot, eye-level, natural lighting, detailed materials. "
                 "Keep the same camera angle and overall layout of this view. "
                 f"Apply this change: {text}. "
-                "A handheld object in the bottom-right of the frame, FPS view. "
-                "No text overlay, no UI chrome."
+                f"{EXPLORATION_GUARD}"
             )
         else:
             prompt = self.DETAIL_PROMPT
-        result = self.run_klein(resized, prompt, th, tw)
+        result = self.run_klein(resized, prompt, th, tw, on_progress=on_progress)
         return result.resize((w, h), Image.Resampling.LANCZOS), prompt
 
 

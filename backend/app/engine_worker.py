@@ -176,6 +176,7 @@ class EngineWorker:
         self._prompt_dirty = True
         self.last_prompt_result = ""
         self.inpaint_status = "off"
+        self.inpaint_progress = 0.0
         self._idle_batches = 0
         self._inpainted_this_idle = False
         self._intent_inpaint_pending: Optional[str] = None
@@ -323,7 +324,7 @@ class EngineWorker:
 
         @torch.inference_mode()
         def gen_frame(eng, ctrl=None, return_img: bool = True):
-            scale = float(worker.prefs.get("temperature", 1.0))
+            scale = float(worker.prefs.get("temperature", 0.4))
             x = torch.randn(eng.frm_shape, device=eng.device, dtype=eng.dtype).mul_(scale)
             inputs = eng.prep_inputs(x=x, ctrl=ctrl)
             x0 = eng._denoise_pass(x, inputs, eng.kv_cache).clone()
@@ -399,10 +400,11 @@ class EngineWorker:
             "vram": mem,
             "gpu_util_pct": gpu_util_pct(),
             "generation_fps": self.generation_fps,
-            "max_fps": config.MAX_FPS if bool(self.prefs.get("fps_lock", True)) else None,
-            "fps_lock": bool(self.prefs.get("fps_lock", True)),
+            "max_fps": config.MAX_FPS if bool(self.prefs.get("fps_lock", False)) else None,
+            "fps_lock": bool(self.prefs.get("fps_lock", False)),
             "inpaint": bool(self.prefs.get("inpaint", False)),
             "inpaint_status": self.inpaint_status,
+            "inpaint_progress": self.inpaint_progress,
             "authoring": authoring.status(),
         }
 
@@ -544,7 +546,7 @@ class EngineWorker:
                         intent.hold_buttons = set()
                         intent.mouse_bias = (0.0, 0.0)
 
-        sens = float(prefs.get("look_sensitivity", 1.0))
+        sens = float(prefs.get("look_sensitivity", 1.75))
         mouse[0] *= sens
         mouse[1] *= sens
         mouse[0] += analog[0] * 0.55 * sens
@@ -810,10 +812,11 @@ class EngineWorker:
             "frames": self.frames_done + len(frames),
             "vram": gpu_mem_mb(),
             "gpu_util_pct": gpu_util_pct(),
-            "fps_lock": bool(prefs.get("fps_lock", True)),
-            "max_fps": config.MAX_FPS if bool(prefs.get("fps_lock", True)) else None,
+            "fps_lock": bool(prefs.get("fps_lock", False)),
+            "max_fps": config.MAX_FPS if bool(prefs.get("fps_lock", False)) else None,
             "inpaint": bool(prefs.get("inpaint", False)),
             "inpaint_status": self.inpaint_status,
+            "inpaint_progress": self.inpaint_progress,
             "session_active": self.session_active,
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt_conditioning": self.prompt_supported,
@@ -877,14 +880,30 @@ class EngineWorker:
                     return True
         return False
 
+    def _publish_inpaint_progress(self, frac: float) -> None:
+        self.inpaint_progress = float(max(0.0, min(1.0, frac)))
+        with self.frame_slot:
+            meta = dict(self.latest_meta) if self.latest_meta else {"type": "stats"}
+            meta["inpaint_status"] = self.inpaint_status
+            meta["inpaint_progress"] = self.inpaint_progress
+            meta["kind"] = "inpaint"
+            self.latest_meta = meta
+            self.frame_slot.notify_all()
+
     def _idle_inpaint_on_gpu(self, modifier: str | None = None) -> None:
         engine = self.engine
         frames = self.last_frames
         if engine is None or frames is None or frames.size == 0:
             return
         self.inpaint_status = "running"
-        self._publish_batch(frames, gen_ms=0.0, kind="inpaint")
-        pil, _prompt = authoring.refine_frame(frames[-1], self.frame_size, user_request=modifier)
+        self.inpaint_progress = 0.08
+        self._publish_inpaint_progress(0.08)
+        pil, _prompt = authoring.refine_frame(
+            frames[-1],
+            self.frame_size,
+            user_request=modifier,
+            on_progress=self._publish_inpaint_progress,
+        )
         arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
         stacked = np.repeat(arr[None, ...], 4, axis=0)
         seed = torch.from_numpy(np.ascontiguousarray(stacked))
@@ -894,7 +913,9 @@ class EngineWorker:
         self.last_frames = out
         self.original_seed = seed.detach().clone()
         self.inpaint_status = "done"
+        self.inpaint_progress = 1.0
         self._publish_batch(out, gen_ms=0.0, kind="inpaint")
+        self.inpaint_progress = 0.0
 
     def _maybe_directed_inpaint(self) -> bool:
         """Speak → Klein edit of the current still. Ignores the Auto-InPaint toggle."""
@@ -918,8 +939,8 @@ class EngineWorker:
         try:
             if authoring.pipeline is None:
                 self.inpaint_status = "loading"
-                if self.last_frames is not None:
-                    self._publish_batch(self.last_frames, gen_ms=0.0, kind="inpaint")
+                self.inpaint_progress = 0.0
+                self._publish_inpaint_progress(0.0)
                 authoring.load()
             self._idle_inpaint_on_gpu(modifier=modifier)
             self._inpainted_this_idle = True
@@ -962,8 +983,8 @@ class EngineWorker:
         try:
             if authoring.pipeline is None:
                 self.inpaint_status = "loading"
-                if self.last_frames is not None:
-                    self._publish_batch(self.last_frames, gen_ms=0.0, kind="inpaint")
+                self.inpaint_progress = 0.0
+                self._publish_inpaint_progress(0.0)
                 authoring.load()
             self._idle_inpaint_on_gpu()
             self._inpainted_this_idle = True
@@ -1017,7 +1038,7 @@ class EngineWorker:
                     self.record_frames.extend([frames[i] for i in range(n)])
                 self._maybe_verify(frames)
                 elapsed = time.perf_counter() - t_cycle
-                fps_lock = bool(self.prefs.get("fps_lock", True))
+                fps_lock = bool(self.prefs.get("fps_lock", False))
                 if fps_lock:
                     min_interval = n / max(config.MAX_FPS, 1.0)
                     self.generation_fps = n / max(elapsed, min_interval)

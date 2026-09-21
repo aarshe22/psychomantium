@@ -85,14 +85,18 @@ type Props = {
   saved: boolean;
   onChange: (next: Prefs) => void;
   onSave: () => void;
+  onReset: () => void;
 };
 
-export default function Knobs({ prefs, saved, onChange, onSave }: Props) {
+export default function Knobs({ prefs, saved, onChange, onSave, onReset }: Props) {
   return (
     <section className="knobs">
-      <header>
+      <header className="row">
         <button type="button" onClick={onSave}>
           {saved ? "Preferences saved" : "Save preferences"}
+        </button>
+        <button type="button" className="ghost" onClick={onReset} title="Restore experience knobs to shipped defaults">
+          Reset to Defaults
         </button>
       </header>
       {PREF_FIELDS.map((f) => (

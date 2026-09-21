@@ -7,6 +7,7 @@
   --dim: #8a8178;
   --bad: #c45c5c;
   --ok: #7ea37a;
+  --neon: #39ff14;
 }
 
 * { box-sizing: border-box; }
@@ -56,8 +57,59 @@ h1 {
   color: inherit;
   min-width: 7.2rem;
 }
+.pill.metric.run {
+  min-width: 8.4rem;
+  text-transform: none;
+}
+.pill.metric.run.running {
+  border-color: var(--neon);
+  color: var(--neon);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon) 55%, transparent);
+}
+.pill.metric.run.running .metric-k,
+.pill.metric.run.running strong { color: var(--neon); }
+.pill.metric.run.stopped { border-color: var(--line); }
+.pill.metric.run.stopped strong { color: var(--dim); }
 .pill.metric.toggle.on { border-color: var(--ember); }
 .pill.metric.toggle.on .metric-k { color: var(--ember); }
+.pill.metric.toggle.inpaint-busy,
+.pill.metric.toggle.inpaint-load {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-color: var(--neon);
+}
+.pill.metric.toggle.inpaint-busy::before,
+.pill.metric.toggle.inpaint-load::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--inpaint-pct, 0%);
+  background: var(--neon);
+  opacity: 0.88;
+  z-index: 0;
+  pointer-events: none;
+  transition: width 0.12s linear;
+}
+.pill.metric.toggle.inpaint-load::before {
+  width: 42%;
+  animation: inpaint-sweep 1.05s ease-in-out infinite;
+}
+.pill.metric.toggle.inpaint-busy > *,
+.pill.metric.toggle.inpaint-load > * {
+  position: relative;
+  z-index: 1;
+}
+.pill.metric.toggle.inpaint-busy .metric-k,
+.pill.metric.toggle.inpaint-busy strong,
+.pill.metric.toggle.inpaint-load .metric-k,
+.pill.metric.toggle.inpaint-load strong {
+  color: #071407;
+}
+@keyframes inpaint-sweep {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(280%); }
+}
 .pill.model-pick {
   display: flex;
   align-items: center;
@@ -168,6 +220,11 @@ button {
   font-weight: 500;
 }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.is-dreaming {
+  background: #c8e6c4;
+  color: #1a2a1a;
+  cursor: default;
+}
 button.ghost { background: transparent; color: var(--mist); border: 1px solid var(--line); }
 .row { display: flex; gap: 0.5rem; }
 .row button { flex: 1; }
@@ -187,9 +244,17 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
   color: var(--mist);
   font-size: 0.65rem;
   text-align: left;
+  border: 2px solid transparent;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
 }
 .seed-card img { width: 100%; height: 64px; object-fit: cover; }
-.seed-card.on { border-color: var(--ember); color: var(--ember); }
+.seed-card.on {
+  border-color: var(--neon);
+  outline-color: var(--neon);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--neon) 70%, transparent);
+  color: var(--neon);
+}
 .fine { font-size: 0.7rem; color: var(--dim); line-height: 1.3; }
 .fine code { color: var(--ember); }
 .intent { display: flex; flex-direction: column; gap: 0.25rem; }
@@ -298,8 +363,8 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
   padding: 0;
   background: transparent;
 }
-.knobs header { margin-bottom: 0.2rem; }
-.knobs header button { padding: 0.25rem 0.5rem; font-size: 0.72rem; width: 100%; }
+.knobs header { margin-bottom: 0.2rem; gap: 0.35rem; }
+.knobs header button { padding: 0.25rem 0.5rem; font-size: 0.72rem; flex: 1; width: auto; }
 .knob { margin-top: 0.28rem; gap: 0.08rem; }
 .knob span {
   display: flex;

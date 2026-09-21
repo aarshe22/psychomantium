@@ -20,6 +20,7 @@ export type Stats = {
   fps_lock?: boolean;
   inpaint?: boolean;
   inpaint_status?: string;
+  inpaint_progress?: number;
   max_fps?: number | null;
   session_active?: boolean;
   intentions?: Intention[];

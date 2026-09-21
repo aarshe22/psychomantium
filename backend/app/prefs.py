@@ -12,17 +12,21 @@ PREFS_PATH = PREFS_DIR / "preferences.json"
 
 DEFAULTS: dict[str, Any] = {
     "resolution": 360,
-    "temperature": 1.0,
-    "look_sensitivity": 1.0,
+    "temperature": 0.4,
+    "look_sensitivity": 1.75,
     "jpeg_quality": 78,
     "wander": 0.0,
     "motion_smoothing": 0.15,
     "dream_sharpness": 0.45,
     "steer_move": True,
     "initial_note": "An explorable dream",
-    "world_prompt": "There is a standard road grid, and buildings.",
+    "world_prompt": (
+        "There is a standard road grid, and buildings. "
+        "Purely exploratory first-person walk: empty unarmed hands. "
+        "No weapons, firearms, hammers, swords, tools, or any held object."
+    ),
     "model_id": "Overworld/Waypoint-1.5-1B-360P",
-    "fps_lock": True,
+    "fps_lock": False,
     "inpaint": False,
 }
 
@@ -53,9 +57,12 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     note = str(src.get("initial_note") or DEFAULTS["initial_note"])[:400]
     out["initial_note"] = note
     world = str(src.get("world_prompt") if src.get("world_prompt") is not None else DEFAULTS["world_prompt"])[:500]
-    out["world_prompt"] = world.strip() or DEFAULTS["world_prompt"]
+    world = world.strip()
+    if world in {"", "There is a standard road grid, and buildings.", "There is a standard road grid, and buildings"}:
+        world = DEFAULTS["world_prompt"]
+    out["world_prompt"] = world
     out["model_id"] = config.resolve_model(str(src.get("model_id") or DEFAULTS["model_id"]))
-    out["fps_lock"] = bool(src.get("fps_lock", True))
+    out["fps_lock"] = bool(src.get("fps_lock", False))
     out["inpaint"] = bool(src.get("inpaint", False))
     return out
 

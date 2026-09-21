@@ -1,4 +1,4 @@
-import { FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
+import { CSSProperties, FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import Accordion from "./Accordion";
 import { FramePacer, splitPackedFrames } from "./FramePacer";
 import Knobs, { Prefs } from "./Knobs";
@@ -9,17 +9,18 @@ type GallerySeed = { id: string; label: string; caption: string; url: string; de
 
 const DEFAULT_PREFS: Prefs = {
   resolution: 360,
-  temperature: 1.0,
-  look_sensitivity: 1.0,
+  temperature: 0.4,
+  look_sensitivity: 1.75,
   jpeg_quality: 78,
   wander: 0.0,
   motion_smoothing: 0.15,
   dream_sharpness: 0.45,
   steer_move: true,
   initial_note: "An explorable dream",
-  world_prompt: "There is a standard road grid, and buildings.",
+  world_prompt:
+    "There is a standard road grid, and buildings. Purely exploratory first-person walk: empty unarmed hands. No weapons, firearms, hammers, swords, tools, or any held object.",
   model_id: "Overworld/Waypoint-1.5-1B-360P",
-  fps_lock: true,
+  fps_lock: false,
   inpaint: false,
 };
 
@@ -253,6 +254,7 @@ export default function App() {
         const msg = JSON.parse(ev.data) as Stats & { type?: string; seq?: number };
         if (msg.type === "ack") return;
         if (msg.intentions) setIntentions(msg.intentions);
+        if (typeof msg.session_active === "boolean") setDreaming(msg.session_active);
         setStats((s) => ({ ...s, ...msg }));
         if (msg.error) setError(msg.error);
         return;
@@ -278,11 +280,13 @@ export default function App() {
 
   async function enterDream(e: FormEvent) {
     e.preventDefault();
+    if (dreaming) return;
     if (!file && !seedId) {
       setError("Choose a starting photograph or a gallery seed.");
       return;
     }
     setError(null);
+    setDreaming(true);
     await fetch("/api/preferences", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -295,14 +299,15 @@ export default function App() {
     const res = await fetch("/api/session/start", { method: "POST", body });
     const data = parseJson(await res.text(), res.statusText);
     if (!res.ok) {
+      setDreaming(false);
       setError(data.error || `Failed to start (${res.status})`);
       return;
     }
-    setDreaming(true);
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) connectWs();
   }
 
   async function stopDream() {
+    if (!dreaming) return;
     setDreaming(false);
     clearKeys();
     pacerRef.current?.reset();
@@ -448,6 +453,28 @@ export default function App() {
     }
   }
 
+  async function resetPrefs() {
+    const next: Prefs = {
+      ...prefs,
+      resolution: DEFAULT_PREFS.resolution,
+      temperature: DEFAULT_PREFS.temperature,
+      look_sensitivity: DEFAULT_PREFS.look_sensitivity,
+      jpeg_quality: DEFAULT_PREFS.jpeg_quality,
+      wander: DEFAULT_PREFS.wander,
+      motion_smoothing: DEFAULT_PREFS.motion_smoothing,
+      dream_sharpness: DEFAULT_PREFS.dream_sharpness,
+      steer_move: DEFAULT_PREFS.steer_move,
+    };
+    livePrefs(next);
+    const res = await fetch("/api/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persist: true, prefs: { ...next, initial_note: prompt } }),
+    });
+    if (res.ok) setSaved(true);
+    else setError("Could not reset preferences");
+  }
+
   function resetView() {
     analogRef.current = [0, 0];
     arrowsRef.current.clear();
@@ -528,6 +555,16 @@ export default function App() {
           <p className="lede">A locally generated lucid-dream sketch. Not a diagnosis. Not a map of you.</p>
         </div>
         <div className="top-meta">
+          <div
+            className={`pill metric run ${dreaming ? "running" : "stopped"}`}
+            title={dreaming ? "Dream session is running. Stop to end it." : "No dream session. Start Dreaming to begin."}
+            aria-live="polite"
+            role="status"
+            aria-label={dreaming ? "session RUNNING" : "session NOT RUNNING"}
+          >
+            <span className="metric-k">session</span>
+            <strong>{dreaming ? "RUNNING" : "NOT RUNNING"}</strong>
+          </div>
           <label className="pill model-pick" title="World model checkpoint">
             <span className="metric-k">model</span>
             <select
@@ -576,11 +613,22 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={`pill metric toggle ${prefs.inpaint ? "on" : ""}`}
+            className={`pill metric toggle ${prefs.inpaint ? "on" : ""} ${
+              stats.inpaint_status === "running" ? "inpaint-busy" : ""
+            } ${stats.inpaint_status === "loading" ? "inpaint-load" : ""}`}
+            style={
+              stats.inpaint_status === "running"
+                ? ({ ["--inpaint-pct"]: `${Math.round(Math.max(0, Math.min(1, stats.inpaint_progress ?? 0)) * 100)}%` } as CSSProperties)
+                : undefined
+            }
             title={
-              prefs.inpaint
-                ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Speak always inpaints, even if this is off."
-                : "Auto-InPaint off. Idle standing still will not refine. Speak still inpaints the current view with your intention."
+              stats.inpaint_status === "running"
+                ? `Inpainting ${Math.round(Math.max(0, Math.min(1, stats.inpaint_progress ?? 0)) * 100)}%`
+                : stats.inpaint_status === "loading"
+                  ? "Loading FLUX.2 Klein for inpaint"
+                  : prefs.inpaint
+                    ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Speak always inpaints, even if this is off."
+                    : "Auto-InPaint off. Idle standing still will not refine. Speak still inpaints the current view with your intention."
             }
             aria-pressed={prefs.inpaint}
             onClick={toggleInpaint}
@@ -590,7 +638,7 @@ export default function App() {
               {stats.inpaint_status === "loading"
                 ? "load"
                 : stats.inpaint_status === "running"
-                  ? "…"
+                  ? `${Math.round(Math.max(0, Math.min(1, stats.inpaint_progress ?? 0)) * 100)}%`
                   : stats.inpaint_status === "error"
                     ? "err"
                     : !prefs.inpaint
@@ -640,7 +688,7 @@ export default function App() {
               <form onSubmit={enterDream}>
                 <p className="fine">
                   Waypoint continues from a <strong>photoreal first-person still</strong>. Upload a photograph,
-                  pick an Overworld starter, or paint one with Klein from the standing prompt.
+                  pick a royalty-free street or landscape still, or paint one with Klein from the standing prompt.
                 </p>
                 <label className="file">
                   Your photograph (best prior)
@@ -654,12 +702,12 @@ export default function App() {
                 <label>
                   Standing world prompt
                   <textarea
-                    rows={2}
+                    rows={3}
                     value={prefs.world_prompt}
                     onChange={(e) => livePrefs({ ...prefs, world_prompt: e.target.value })}
                     onFocus={() => (typingRef.current = true)}
                     onBlur={() => (typingRef.current = false)}
-                    placeholder="There is a standard road grid, and buildings."
+                    placeholder="Peaceful exploration. Empty hands. No weapons."
                   />
                 </label>
                 <label>
@@ -687,7 +735,7 @@ export default function App() {
                 </button>
                 {gallery.length > 0 && (
                   <>
-                    <p className="fine">Overworld photoreal starters</p>
+                    <p className="fine">Royalty-free urban and rural stills</p>
                     <div className="seed-grid">
                     {gallery.map((s) => (
                       <button
@@ -705,10 +753,15 @@ export default function App() {
                   </>
                 )}
                 <div className="row">
-                  <button type="submit" disabled={!ready || (!file && !seedId) || painting}>
-                    Start Dreaming
+                  <button
+                    type="submit"
+                    className={dreaming ? "is-dreaming" : undefined}
+                    disabled={!dreaming && (!ready || (!file && !seedId) || painting)}
+                    aria-pressed={dreaming}
+                  >
+                    {dreaming ? "Dreaming" : "Start Dreaming"}
                   </button>
-                  <button type="button" className="ghost" onClick={stopDream} disabled={!dreaming}>
+                  <button type="button" className="ghost" onClick={stopDream}>
                     Stop
                   </button>
                 </div>
@@ -772,7 +825,7 @@ export default function App() {
             </Accordion>
 
             <Accordion id="knobs" title="Experience knobs" open={!!openAcc.knobs} onToggle={toggleAcc}>
-              <Knobs prefs={prefs} saved={saved} onChange={livePrefs} onSave={savePrefs} />
+              <Knobs prefs={prefs} saved={saved} onChange={livePrefs} onSave={savePrefs} onReset={resetPrefs} />
             </Accordion>
 
             <Accordion id="diag" title="Diagnostics" open={!!openAcc.diag} onToggle={toggleAcc}>

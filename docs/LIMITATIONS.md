@@ -50,7 +50,7 @@ Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein
 - No permanent geography, physics, or object persistence (by design of the model).
 - Backtracking invents new scenery.
 - Live language conditioning is **not** implemented by these weights. Typing a sentence does not steer the DiT’s cross-attention. Biome does not `set_prompt` on 1B either.
-- The seed image is the world prior. Gallery stills are Overworld's public photoreal Space starters (cached on the host) or Klein-painted frames, plus user upload. Schematic drawings are out of distribution.
+- The seed image is the world prior. Gallery stills are royalty-free eye-level urban and rural photographs (Wikimedia Commons / StockSnap, cached on the host) or Klein-painted frames, plus user upload. Overworld FPS stills are not used: they show hands and weapons. Schematic drawings are out of distribution.
 - Experimental transforms change the seed image, then the world model continues. That is not “the model understood night.”
 - The browser spreads each 4-frame batch across the last batch interval (EMA). That is display pacing, not extra inference.
 - `torch.compile` makes the first batches slow; a warmup `gen_frame` after seed absorbs some of that. Diagnostics report generation FPS from `gen_frame` wall time, separately from paced delivered FPS.
