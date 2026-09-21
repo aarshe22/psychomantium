@@ -37,6 +37,39 @@ h1 {
 .pill.ok { color: var(--ok); border-color: #355; }
 .pill.wait { color: var(--ember); }
 .pill.bad { color: var(--bad); }
+.top-meta { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.pill.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  min-width: 4.6rem;
+  justify-content: center;
+}
+.pill.metric .metric-k { color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.pill.metric strong { font-weight: 600; font-size: 0.86rem; color: var(--mist); }
+.pill.model-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-transform: none;
+  padding: 0.2rem 0.55rem 0.2rem 0.7rem;
+}
+.pill.model-pick select {
+  appearance: none;
+  background: transparent;
+  color: var(--mist);
+  border: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  max-width: 13.5rem;
+  cursor: pointer;
+  outline: none;
+}
+.pill.model-pick select:disabled { opacity: 0.45; cursor: not-allowed; }
+.pill.model-pick select option { background: var(--panel); color: var(--mist); }
 
 .stage {
   display: grid;

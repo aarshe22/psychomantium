@@ -9,6 +9,7 @@ export type Prefs = {
   steer_move: boolean;
   initial_note: string;
   world_prompt: string;
+  model_id: string;
 };
 
 export const PREF_FIELDS: {
@@ -25,7 +26,7 @@ export const PREF_FIELDS: {
     min: 360,
     max: 720,
     step: 60,
-    hint: "Native generation is 640×360. Higher values upscale frames for the stream, not a second world model.",
+    hint: "JPEG stream size. Native generation is 640×360 or 1280×720 depending on the selected checkpoint; this slider only resizes the stream.",
   },
   {
     key: "temperature",

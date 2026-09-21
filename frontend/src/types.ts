@@ -16,6 +16,7 @@ export type Stats = {
   batches?: number;
   frames?: number;
   vram?: { allocated_mb?: number; reserved_mb?: number; max_allocated_mb?: number };
+  gpu_util_pct?: number | null;
   session_active?: boolean;
   intentions?: Intention[];
   prompt_conditioning?: boolean;
@@ -23,6 +24,7 @@ export type Stats = {
   prompt_apply?: string;
   error?: string | null;
   model?: string;
+  models?: { id: string; label: string; width?: number; height?: number; selected?: boolean }[];
   ready?: boolean;
   loading?: boolean;
   clients?: number;

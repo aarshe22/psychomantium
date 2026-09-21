@@ -17,6 +17,7 @@ const DEFAULT_PREFS: Prefs = {
   steer_move: true,
   initial_note: "An explorable dream",
   world_prompt: "There is a standard road grid, and buildings.",
+  model_id: "Overworld/Waypoint-1.5-1B-360P",
 };
 
 function parseJson(text: string, fallback: string) {
@@ -74,7 +75,6 @@ export default function App() {
   const mouseRef = useRef<[number, number]>([0, 0]);
   const analogRef = useRef<[number, number]>([0, 0]);
   const arrowsRef = useRef<Set<string>>(new Set());
-  const scrollRef = useRef(0);
   const typingRef = useRef(false);
   const lastUrl = useRef<string | null>(null);
   const frameTimes = useRef<number[]>([]);
@@ -129,7 +129,7 @@ export default function App() {
       }
     };
     poll();
-    const id = setInterval(poll, 2500);
+    const id = setInterval(poll, 1000);
     return () => {
       stop = true;
       clearInterval(id);
@@ -146,11 +146,9 @@ export default function App() {
         mouse: mouseRef.current,
         analog: analogRef.current,
         arrows: [...arrowsRef.current],
-        scroll: scrollRef.current,
       }),
     );
     mouseRef.current = [0, 0];
-    scrollRef.current = 0;
   }, []);
 
   const clearKeys = useCallback(() => {
@@ -292,6 +290,34 @@ export default function App() {
     await fetch("/api/session/stop", { method: "POST" });
   }
 
+  async function changeModel(nextId: string) {
+    const current = stats.model || prefs.model_id;
+    if (!nextId || nextId === current) return;
+    setError(null);
+    if (dreaming) await stopDream();
+    setLoadingModel(true);
+    setReady(false);
+    const res = await fetch("/api/model", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: nextId }),
+    });
+    const data = parseJson(await res.text(), res.statusText) as {
+      error?: string;
+      prefs?: Prefs;
+      model?: string;
+    };
+    if (!res.ok) {
+      setError(data.error || `Could not switch model (${res.status})`);
+      setLoadingModel(false);
+      return;
+    }
+    if (data.prefs) setPrefs({ ...DEFAULT_PREFS, ...data.prefs });
+    setStats((s) => ({ ...s, model: data.model || nextId }));
+    setReady(true);
+    setLoadingModel(false);
+  }
+
   async function submitIntention(e: FormEvent) {
     e.preventDefault();
     const text = intentionText.trim();
@@ -388,16 +414,9 @@ export default function App() {
         mouseRef.current[1] += e.movementY / 420;
       }
     };
-    const onWheel = (e: WheelEvent) => {
-      if (!dreaming || typingRef.current) return;
-      if (e.deltaY < 0) scrollRef.current = 1;
-      if (e.deltaY > 0) scrollRef.current = -1;
-    };
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("wheel", onWheel, { passive: true });
     return () => {
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("wheel", onWheel);
     };
   }, [dreaming]);
 
@@ -408,8 +427,46 @@ export default function App() {
           <h1>Psychomantium</h1>
           <p className="lede">A locally generated lucid-dream sketch. Not a diagnosis. Not a map of you.</p>
         </div>
-        <div className={`pill ${ready ? "ok" : loadingModel ? "wait" : "bad"}`}>
-          {ready ? "model ready" : loadingModel ? "loading weights" : "server only"}
+        <div className="top-meta">
+          <label className="pill model-pick" title="World model checkpoint">
+            <span className="metric-k">model</span>
+            <select
+              value={stats.model || prefs.model_id}
+              disabled={loadingModel}
+              onChange={(e) => changeModel(e.target.value)}
+            >
+              {(stats.models && stats.models.length > 0
+                ? stats.models
+                : [
+                    { id: "Overworld/Waypoint-1.5-1B-360P", label: "Waypoint 1B · 360p" },
+                    { id: "Overworld/Waypoint-1.5-1B", label: "Waypoint 1B · 720p" },
+                  ]
+              ).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="pill metric" title="GPU SM utilization from nvidia-smi">
+            <span className="metric-k">gpu</span>
+            <strong>
+              {typeof stats.gpu_util_pct === "number" ? `${Math.round(stats.gpu_util_pct)}%` : "—"}
+            </strong>
+          </div>
+          <div className="pill metric" title="Generation frames per second">
+            <span className="metric-k">fps</span>
+            <strong>
+              {dreaming && typeof stats.generation_fps === "number" && stats.generation_fps > 0
+                ? stats.generation_fps.toFixed(1)
+                : dreaming && deliveredFps > 0
+                  ? deliveredFps.toFixed(0)
+                  : "—"}
+            </strong>
+          </div>
+          <div className={`pill ${ready ? "ok" : loadingModel ? "wait" : "bad"}`}>
+            {ready ? "model ready" : loadingModel ? "loading weights" : "server only"}
+          </div>
         </div>
       </header>
 

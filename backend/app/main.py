@@ -70,6 +70,25 @@ def status():
     return worker.diagnostics()
 
 
+@app.get("/api/models")
+def list_models():
+    return {"models": worker.models_public(), "model": worker.model_id, "loading": worker.loading, "ready": worker.ready}
+
+
+@app.put("/api/model")
+async def put_model(payload: dict[str, Any]):
+    mid = str(payload.get("model") or payload.get("id") or "").strip()
+    if not mid:
+        return JSONResponse({"error": "missing model"}, status_code=400)
+    result = await asyncio.get_event_loop().run_in_executor(None, worker.select_model, mid)
+    if not result.get("ok"):
+        status = 409 if "progress" in str(result.get("error") or "") else 500
+        if "unknown" in str(result.get("error") or ""):
+            status = 400
+        return JSONResponse(result, status_code=status)
+    return result
+
+
 @app.get("/api/preferences")
 def get_preferences():
     return {"prefs": worker.prefs, "specs": SPECS, "path": "/data/preferences/preferences.json"}
@@ -162,11 +181,10 @@ async def stream(ws: WebSocket):
                     mouse = msg.get("mouse") or [0, 0]
                     analog = msg.get("analog") or [0, 0]
                     arrows = msg.get("arrows") or []
-                    scroll = int(msg.get("scroll") or 0)
                     seq = worker.set_controls(
                         buttons,
                         (float(mouse[0]), float(mouse[1])),
-                        scroll,
+                        0,
                         (float(analog[0]), float(analog[1])),
                         list(arrows),
                     )

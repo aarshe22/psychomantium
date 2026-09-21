@@ -21,6 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "steer_move": True,
     "initial_note": "An explorable dream",
     "world_prompt": "There is a standard road grid, and buildings.",
+    "model_id": "Overworld/Waypoint-1.5-1B-360P",
 }
 
 SPECS: dict[str, dict[str, float | str]] = {
@@ -51,6 +52,7 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["initial_note"] = note
     world = str(src.get("world_prompt") if src.get("world_prompt") is not None else DEFAULTS["world_prompt"])[:500]
     out["world_prompt"] = world.strip() or DEFAULTS["world_prompt"]
+    out["model_id"] = config.resolve_model(str(src.get("model_id") or DEFAULTS["model_id"]))
     return out
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import io
 import os
+import subprocess
 import types
 import queue
 import threading
@@ -24,6 +26,10 @@ from .prefs import clamp_prefs, load_prefs, output_size, save_prefs
 FRAME_HEADER_MAGIC = 0x50535943  # 'PSYC'
 
 
+_GPU_UTIL_LOCK = threading.Lock()
+_GPU_UTIL_CACHE: tuple[float, float | None] = (0.0, None)
+
+
 def gpu_mem_mb() -> dict[str, float]:
     if not torch.cuda.is_available():
         return {"allocated_mb": 0.0, "reserved_mb": 0.0, "max_allocated_mb": 0.0}
@@ -32,6 +38,37 @@ def gpu_mem_mb() -> dict[str, float]:
         "reserved_mb": torch.cuda.memory_reserved() / (1024 * 1024),
         "max_allocated_mb": torch.cuda.max_memory_allocated() / (1024 * 1024),
     }
+
+
+def gpu_util_pct() -> float | None:
+    """SM busy percent from nvidia-smi (cached ~0.8s)."""
+    global _GPU_UTIL_CACHE
+    now = time.monotonic()
+    with _GPU_UTIL_LOCK:
+        ts, cached = _GPU_UTIL_CACHE
+        if now - ts < 0.8 and cached is not None:
+            return cached
+    value: float | None = None
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            timeout=1.2,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        line = out.strip().splitlines()[0]
+        value = float(line.split(",")[0].strip())
+        value = max(0.0, min(100.0, value))
+    except Exception:
+        try:
+            if torch.cuda.is_available() and hasattr(torch.cuda, "utilization"):
+                value = float(torch.cuda.utilization())
+                value = max(0.0, min(100.0, value))
+        except Exception:
+            value = None
+    with _GPU_UTIL_LOCK:
+        _GPU_UTIL_CACHE = (now, value)
+    return value
 
 
 def encode_jpeg(rgb: np.ndarray, quality: int, size_wh: tuple[int, int] | None = None) -> bytes:
@@ -119,13 +156,13 @@ class EngineWorker:
         self.clients = 0
         self.disconnect_deadline: Optional[float] = None
         self.prompt_supported = False
-        self.model_id = config.MODEL_ID
+        self.prefs = load_prefs()
+        self.model_id = config.resolve_model(self.prefs.get("model_id"))
         self.pre_transform_stats: dict[str, float] = {}
         self.verify_until_batch = 0
         self.verify_intent_id: Optional[int] = None
         self.record_frames: list[np.ndarray] = []
         self.recording = False
-        self.prefs = load_prefs()
         self.view_yaw = 0.0
         self.view_pitch = 0.0
         self.reset_look = False
@@ -176,6 +213,7 @@ class EngineWorker:
                 return
             self.loading = True
             self.load_error = None
+            self.model_id = config.resolve_model(self.prefs.get("model_id") or self.model_id)
         try:
             self._gpu_call("load")
         except Exception as exc:
@@ -185,11 +223,69 @@ class EngineWorker:
                 self.ready = False
             raise
 
+    def models_public(self) -> list[dict[str, Any]]:
+        return [
+            {
+                **m,
+                "selected": m["id"] == self.model_id,
+            }
+            for m in config.MODELS
+        ]
+
+    def select_model(self, model_id: str) -> dict[str, Any]:
+        if model_id not in config.MODEL_IDS:
+            return {"ok": False, "error": f"unknown model: {model_id}"}
+        if self.loading:
+            return {"ok": False, "error": "model load already in progress"}
+        if model_id == self.model_id and self.ready:
+            return {
+                "ok": True,
+                "model": self.model_id,
+                "frame_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
+            }
+        self.stop_session()
+        with self.lock:
+            if self.loading:
+                return {"ok": False, "error": "model load already in progress"}
+            self.loading = True
+            self.ready = False
+            self.load_error = None
+            self.model_id = model_id
+            prefs = dict(self.prefs)
+            prefs["model_id"] = model_id
+            prefs["resolution"] = config.frame_size_for(model_id)[1]
+            self.prefs = save_prefs(prefs)
+        try:
+            self._gpu_call("load")
+            w, h = self.frame_size
+            return {"ok": True, "model": self.model_id, "frame_size": {"width": w, "height": h}, "prefs": dict(self.prefs)}
+        except Exception as exc:
+            msg = f"{type(exc).__name__}: {exc}"
+            with self.lock:
+                self.load_error = msg
+                self.loading = False
+                self.ready = False
+            if "CUDA" in msg or "AcceleratorError" in type(exc).__name__:
+                self._request_cuda_restart(msg)
+            return {"ok": False, "error": msg}
+
+    def _unload_engine(self) -> None:
+        eng = self.engine
+        self.engine = None
+        self._sigma_base = None
+        if eng is not None:
+            del eng
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
     def _load_engine(self) -> None:
         t0 = time.perf_counter()
         from world_engine import WorldEngine
 
-        engine = WorldEngine(config.MODEL_ID, quant=config.QUANT, device=config.DEVICE)
+        self._unload_engine()
+        engine = WorldEngine(self.model_id, quant=config.QUANT, device=config.DEVICE)
         self._install_temperature_hook(engine)
         self._sigma_base = engine.scheduler_sigmas.detach().clone()
         self._apply_scheduler(engine)
@@ -205,6 +301,10 @@ class EngineWorker:
             self.ready = True
             self.load_seconds = time.perf_counter() - t0
             self.loading = False
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        return config.frame_size_for(self.model_id)
 
     def _install_temperature_hook(self, engine) -> None:
         worker = self
@@ -269,14 +369,18 @@ class EngineWorker:
             "ready": self.ready,
             "loading": self.loading,
             "error": self.load_error,
-            "model": config.MODEL_ID,
+            "model": self.model_id,
+            "models": self.models_public(),
             "engine_sha": config.ENGINE_SHA,
             "quant": config.QUANT,
-            "frame_size": {"width": config.FRAME_SIZE[0], "height": config.FRAME_SIZE[1]},
+            "frame_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
             "prompt_conditioning": self.prompt_supported,
             "load_seconds": self.load_seconds,
             "session_active": self.session_active,
             "vram": mem,
+            "gpu_util_pct": gpu_util_pct(),
+            "generation_fps": self.generation_fps,
+            "max_fps": config.MAX_FPS,
         }
 
     def set_controls(
@@ -297,7 +401,7 @@ class EngineWorker:
             self.controls.analog = (ax, ay)
             allowed = {"left", "right", "up", "down"}
             self.controls.arrows = {a for a in (arrows or []) if a in allowed}
-            self.controls.scroll = int(max(-1, min(1, scroll)))
+            self.controls.scroll = 0
             self.controls.seq += 1
             return self.controls.seq
 
@@ -385,7 +489,6 @@ class EngineWorker:
             mouse = list(self.controls.mouse)
             analog = list(self.controls.analog)
             arrows = set(self.controls.arrows)
-            scroll = self.controls.scroll
             for intent in self.intentions:
                 if not intent.active:
                     continue
@@ -447,13 +550,13 @@ class EngineWorker:
         self.view_pitch += my
         self.view_yaw = float(max(-12.0, min(12.0, self.view_yaw)))
         self.view_pitch = float(max(-6.0, min(6.0, self.view_pitch)))
-        return CtrlInput(button=buttons, mouse=(mx, my), scroll_wheel=scroll)
+        return CtrlInput(button=buttons, mouse=(mx, my), scroll_wheel=0)
 
     def start_session(self, image_bytes: bytes, prompt: str = "") -> dict[str, Any]:
         if not self.ready or self.engine is None:
             return {"ok": False, "error": self.load_error or "model not ready"}
         try:
-            seed = image_to_seed(image_bytes, config.FRAME_SIZE)
+            seed = image_to_seed(image_bytes, self.frame_size)
             preview = encode_jpeg(seed[0].numpy(), 85)
         except Exception as exc:
             return {"ok": False, "error": f"bad seed image: {exc}"}
@@ -596,16 +699,18 @@ class EngineWorker:
             "batches": self.batches_done,
             "frames": self.frames_done + len(frames),
             "vram": gpu_mem_mb(),
+            "gpu_util_pct": gpu_util_pct(),
             "session_active": self.session_active,
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt_conditioning": self.prompt_supported,
             "error": self.last_error,
-            "model": config.MODEL_ID,
+            "model": self.model_id,
+            "models": self.models_public(),
             "prefs": dict(prefs),
             "composed_prompt": self.composed_prompt(),
             "prompt_apply": self.last_prompt_result,
             "view": {"yaw": self.view_yaw, "pitch": self.view_pitch, "resetting": self.reset_look},
-            "native_size": {"width": config.FRAME_SIZE[0], "height": config.FRAME_SIZE[1]},
+            "native_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
             "stream_size": {"width": w, "height": h},
         }
         blob = b"".join(payloads)
@@ -652,6 +757,7 @@ class EngineWorker:
                     if intent.status == "received" and intent.kind != "transform" and intent.engine_action != "none":
                         intent.status = "submitted"
                 ctrl = self._merged_ctrl()
+                t_cycle = time.perf_counter()
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 t0 = time.perf_counter()
@@ -662,14 +768,19 @@ class EngineWorker:
                 gen_ms = (time.perf_counter() - t0) * 1000.0
                 n = int(frames.shape[0])
                 self.last_gen_ms = gen_ms
-                self.generation_fps = (n * 1000.0 / gen_ms) if gen_ms > 0 else 0.0
                 self.batches_done += 1
                 self.frames_done += n
                 self.last_frames = frames
                 if self.recording:
                     self.record_frames.extend([frames[i] for i in range(n)])
                 self._maybe_verify(frames)
+                elapsed = time.perf_counter() - t_cycle
+                min_interval = n / max(config.MAX_FPS, 1.0)
+                self.generation_fps = n / max(elapsed, min_interval)
                 self._publish_batch(frames, gen_ms=gen_ms, kind="generated")
+                remain = min_interval - (time.perf_counter() - t_cycle)
+                if remain > 0 and self.stop_event.wait(remain):
+                    break
             except Exception as exc:
                 self.last_error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
                 if "CUDA" in self.last_error or "AcceleratorError" in type(exc).__name__:

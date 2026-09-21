@@ -77,9 +77,7 @@ Writes `data/outputs/probe/probe_report.json` and `probe_sample.mp4`.
 
 ### 720p checkpoint
 
-```bash
-WAYPOINT_MODEL=Overworld/Waypoint-1.5-1B docker compose up --build
-```
+Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B` (1280×720) are in the local HF cache. Pick one from the **model** dropdown in the top bar. Switching unloads the current engine and loads the other on the GPU (the dream session stops). Stream resolution is set to that checkpoint’s native height.
 
 ## Controls
 
@@ -90,7 +88,7 @@ WAYPOINT_MODEL=Overworld/Waypoint-1.5-1B docker compose up --build
 - Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
 - Movement keys are ignored while the intention/prompt fields are focused
 - **Enter** in the intention field submits
-- Scroll wheel sends `CtrlInput.scroll_wheel`
+- Mouse scroll wheel is ignored (not sent as `CtrlInput.scroll_wheel`)
 
 ## Experience knobs
 
@@ -98,7 +96,7 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 
 | Knob | What it actually does |
 |---|---|
-| Output resolution | Upscales the 640×360 generated frames for the JPEG stream (360–720). Native generation stays 360p on this checkpoint. |
+| Output resolution | Resizes generated frames for the JPEG stream (360–720). Native generation is 640×360 or 1280×720 from the selected checkpoint. |
 | Inference temperature | Multiplies the `torch.randn` start-noise inside `gen_frame`. 1.0 is the engine default. |
 | Look sensitivity | Scales mouse / ball / arrow look velocity |
 | Stream JPEG quality | Encode quality only |
