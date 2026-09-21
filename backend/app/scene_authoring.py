@@ -287,6 +287,18 @@ class SceneAuthoring:
         from huggingface_hub import hf_hub_download
         from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
+        try:
+            import gguf  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "Klein GGUF load needs the gguf package (pip install 'gguf>=0.10.0')."
+            ) from exc
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "Klein 4-bit text encoder needs bitsandbytes (pip install bitsandbytes==0.49.2)."
+            ) from exc
         gguf_path = hf_hub_download(repo_id=KLEIN_GGUF_REPO, filename=KLEIN_GGUF_FILE)
         transformer = Flux2Transformer2DModel.from_single_file(
             gguf_path,

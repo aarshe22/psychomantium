@@ -31,7 +31,7 @@ from .dream_scene import (
 )
 from .intentions import Intention, parse_intention
 from .prefs import clamp_prefs, load_prefs, output_size, save_prefs
-from .scene_authoring import authoring
+from .scene_authoring import AuthoringNotReady, authoring
 from .seeds import save_painted
 
 FRAME_HEADER_MAGIC = 0x50535943  # 'PSYC'
@@ -803,9 +803,17 @@ class EngineWorker:
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    def _ensure_klein(self, retry: bool = False) -> None:
+        if authoring.pipeline is not None:
+            return
+        if authoring.error and not retry:
+            raise AuthoringNotReady(authoring.error)
+        if retry:
+            authoring.error = None
+        authoring.load()
+
     def _paint_on_gpu(self, text: str) -> dict[str, Any]:
-        if authoring.pipeline is None:
-            authoring.load()
+        self._ensure_klein(retry=True)
         work = klein_work_size(self.frame_size)
         pil, klein_prompt = authoring.generate_from_text(text, work)
         native_w, native_h = self.frame_size
@@ -1291,7 +1299,7 @@ class EngineWorker:
                 self.inpaint_status = "loading"
                 self.inpaint_progress = 0.0
                 self._publish_inpaint_progress(0.0)
-                authoring.load()
+                self._ensure_klein()
             self._scene_inpaint_on_gpu(fallback_prompt=prompt, kind=event)
             self._last_scene_event = event
             self._last_rescue_at = time.monotonic()
@@ -1403,7 +1411,7 @@ class EngineWorker:
                 self.inpaint_status = "loading"
                 self.inpaint_progress = 0.0
                 self._publish_inpaint_progress(0.0)
-                authoring.load()
+                self._ensure_klein()
             self._idle_inpaint_on_gpu(modifier=modifier)
             self._inpainted_this_idle = True
             if intent is not None:
@@ -1462,7 +1470,7 @@ class EngineWorker:
                 self.inpaint_status = "loading"
                 self.inpaint_progress = 0.0
                 self._publish_inpaint_progress(0.0)
-                authoring.load()
+                self._ensure_klein()
             self._idle_inpaint_on_gpu()
             self._inpainted_this_idle = True
             self._last_drift_at = time.monotonic()
