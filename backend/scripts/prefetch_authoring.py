@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""Prefetch Gemma + FLUX.2 Klein weights into HF_HOME (skip unused full DiT shards)."""
+"""Prefetch Gemma + FLUX.2 Klein into HF_HOME.
+
+Prefer the host entrypoint: ``./scripts/pre-cache-models`` (also pulls Waypoint).
+This helper remains for ``docker compose exec backend python scripts/prefetch_authoring.py``.
+"""
+
+from __future__ import annotations
+
+import runpy
+import sys
+from pathlib import Path
+
+# In the GPU image, /app is backend/; the host script lives at repo scripts/.
+candidates = [
+    Path("/opt/psychomantium-scripts/pre_cache_models.py"),
+    Path(__file__).resolve().parents[2] / "scripts" / "pre_cache_models.py",
+]
+for path in candidates:
+    if path.is_file():
+        sys.argv = [str(path), *[a for a in sys.argv[1:] if a]]
+        runpy.run_path(str(path), run_name="__main__")
+        raise SystemExit(0)
 
 from huggingface_hub import hf_hub_download, snapshot_download
 

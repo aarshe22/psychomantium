@@ -308,6 +308,66 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
   cursor: crosshair;
 }
 .viewport img { width: 100%; height: 100%; object-fit: contain; display: block; background: #050406; }
+.viewport img.is-empty { display: none; }
+.viewport.idle { cursor: default; }
+.get-started {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 1.1rem 1.35rem 1.6rem;
+  background: radial-gradient(900px 520px at 18% -8%, #1b1620 0%, #050406 58%);
+  color: var(--mist);
+  cursor: default;
+}
+.get-started-inner { max-width: 40rem; margin: 0 auto; }
+.get-started .eyebrow {
+  margin: 0 0 0.15rem;
+  color: var(--ember);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.get-started h2 {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-weight: 500;
+  font-size: 1.7rem;
+  letter-spacing: 0.03em;
+  margin: 0 0 0.45rem;
+}
+.get-started h3 {
+  margin: 1rem 0 0.35rem;
+  color: var(--ember);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.get-started p, .get-started li, .get-started dd {
+  color: var(--mist);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.get-started p { margin: 0 0 0.55rem; }
+.get-started ol {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.get-started .ctl {
+  display: grid;
+  grid-template-columns: 7.2rem 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+}
+.get-started .ctl dt {
+  margin: 0;
+  color: var(--ember);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+.get-started .ctl dd { margin: 0; color: var(--dim); }
 .veil, .hint {
   position: absolute;
   inset: auto 0 0 0;

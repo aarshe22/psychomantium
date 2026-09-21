@@ -1,9 +1,8 @@
 """Photoreal start frames for Waypoint.
 
-The 1B DiT continues from pixels. Gallery stills are royalty-free eye-level
-urban and rural photographs (Wikimedia Commons / StockSnap), plus optional
-Klein-painted seeds. Overworld FPS stills are not listed: they show hands
-and weapons. User upload stays first-class.
+The 1B DiT continues from pixels. Gallery stills are CC0 eye-level paths and
+roads (no first-person hands or weapons), plus optional Klein-painted seeds.
+User upload stays first-class.
 """
 
 from __future__ import annotations
@@ -25,73 +24,8 @@ CC0_DIR = SEEDS_DIR / "cc0"
 PAINTED_DIR = SEEDS_DIR / "painted"
 USER_AGENT = "Psychomantium/0.1 (https://github.com/aarshe22/psychomantium)"
 
-# Curated empty streets/paths. No first-person hands or weapons.
+# CC0 only. Eye-level empty paths/roads. No first-person hands or weapons.
 STARTERS: list[dict[str, str]] = [
-    {
-        "id": "urban-ghent",
-        "label": "Tree boulevard",
-        "caption": "Empty Ghent avenue. CC BY-SA 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Empty_street_in_Ghent.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Empty_street_in_Ghent.jpg",
-        "license": "CC BY-SA 4.0",
-        "default": "1",
-    },
-    {
-        "id": "urban-bergama",
-        "label": "Cobblestone street",
-        "caption": "Empty Bergama street. CC BY-SA 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/5/58/Empty_street_during_the_coronavirus_pandemic_in_Bergama%2C_%C4%B0zmir.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Empty_street_during_the_coronavirus_pandemic_in_Bergama,_%C4%B0zmir.jpg",
-        "license": "CC BY-SA 4.0",
-    },
-    {
-        "id": "urban-moscow",
-        "label": "Plaza morning",
-        "caption": "Empty Nikolskaya Street, Moscow. CC BY 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Moscow_-_2025_-_empty_Nikolskaya_Street_in_the_morning.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Moscow_-_2025_-_empty_Nikolskaya_Street_in_the_morning.jpg",
-        "license": "CC BY 4.0",
-    },
-    {
-        "id": "urban-street",
-        "label": "Snow street",
-        "caption": "Snowed-in city street at night. CC BY 2.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/2/27/Empty_Street_%2850903495093%29.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Empty_Street_(50903495093).jpg",
-        "license": "CC BY 2.0",
-    },
-    {
-        "id": "urban-london",
-        "label": "Regent Street",
-        "caption": "Empty Regent Street, London. CC BY-SA 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/e/ef/Regent_Street_Central_London_UK_COVID_19_Empty_Street.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Regent_Street_Central_London_UK_COVID_19_Empty_Street.jpg",
-        "license": "CC BY-SA 4.0",
-    },
-    {
-        "id": "rural-fog",
-        "label": "Foggy farm road",
-        "caption": "Rural dirt road in fog, Texas. CC BY-SA 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Rural_dirt_road_and_trees_in_the_fog_in_Texas.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Rural_dirt_road_and_trees_in_the_fog_in_Texas.jpg",
-        "license": "CC BY-SA 4.0",
-    },
-    {
-        "id": "rural-forest",
-        "label": "Forest path",
-        "caption": "Deciduous forest path, Finland. CC BY-SA 4.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/7/72/Forest_path_through_a_deciduous_forest_in_spring%2C_Finland.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:Forest_path_through_a_deciduous_forest_in_spring,_Finland.jpg",
-        "license": "CC BY-SA 4.0",
-    },
-    {
-        "id": "rural-dales",
-        "label": "Dales road",
-        "caption": "Yorkshire Dales country road. CC BY-SA 3.0, Wikimedia Commons.",
-        "url": "https://upload.wikimedia.org/wikipedia/commons/0/06/2014_Yorkshire_Dales_country_road_Swaledale_Askrigg.jpg",
-        "page": "https://commons.wikimedia.org/wiki/File:2014_Yorkshire_Dales_country_road_Swaledale_Askrigg.jpg",
-        "license": "CC BY-SA 3.0",
-    },
     {
         "id": "rural-lane",
         "label": "Dirt lane",
@@ -99,13 +33,86 @@ STARTERS: list[dict[str, str]] = [
         "url": "https://upload.wikimedia.org/wikipedia/commons/5/5b/Rural_dirt_road_with_trees_and_stone_fencing.jpg",
         "page": "https://commons.wikimedia.org/wiki/File:Rural_dirt_road_with_trees_and_stone_fencing.jpg",
         "license": "CC0",
+        "default": "1",
     },
     {
-        "id": "rural-stocksnap",
-        "label": "Open highway",
+        "id": "forest-path",
+        "label": "Forest path",
+        "caption": "Woodland trail. CC0, Mary / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/MCACZTS9BA.jpg",
+        "page": "https://stocksnap.io/photo/nature-path-MCACZTS9BA",
+        "license": "CC0",
+    },
+    {
+        "id": "woodland-road",
+        "label": "Woodland road",
+        "caption": "Gravel track under trees. CC0, Bernard Spragg / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/ESO8XIDNEC.jpg",
+        "page": "https://stocksnap.io/photo/nature-path-ESO8XIDNEC",
+        "license": "CC0",
+    },
+    {
+        "id": "stone-path",
+        "label": "Stone path",
+        "caption": "Winding stone path in woods. CC0, World Travel Adventures / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/ZVYAK6FCCL.jpg",
+        "page": "https://stocksnap.io/photo/nature-path-ZVYAK6FCCL",
+        "license": "CC0",
+    },
+    {
+        "id": "grass-path",
+        "label": "Grass path",
+        "caption": "Narrow grass trail. CC0, Bernard Spragg / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/0KEW2IKHUF.jpg",
+        "page": "https://stocksnap.io/photo/nature-path-0KEW2IKHUF",
+        "license": "CC0",
+    },
+    {
+        "id": "farm-dirt",
+        "label": "Farm dirt road",
+        "caption": "Empty rural dirt road. CC0, StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/TQ6F3TW2LU.jpg",
+        "page": "https://stocksnap.io/photo/rural-dirt-TQ6F3TW2LU",
+        "license": "CC0",
+    },
+    {
+        "id": "moor-highway",
+        "label": "Moor highway",
         "caption": "Empty rural highway. CC0, Dave Meier / StockSnap.",
         "url": "https://cdn.stocksnap.io/img-thumbs/960w/DC980ABE32.jpg",
         "page": "https://stocksnap.io/photo/road-rural-DC980ABE32",
+        "license": "CC0",
+    },
+    {
+        "id": "desert-highway",
+        "label": "Desert highway",
+        "caption": "Empty desert two-lane. CC0, Salvatore Ventura / StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/XJ2BKV9ASS.jpg",
+        "page": "https://stocksnap.io/photo/highway-road-XJ2BKV9ASS",
+        "license": "CC0",
+    },
+    {
+        "id": "canyon-road",
+        "label": "Canyon road",
+        "caption": "Empty canyon highway. CC0, StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/TXCAIIB92G.jpg",
+        "page": "https://stocksnap.io/photo/travel-road-TXCAIIB92G",
+        "license": "CC0",
+    },
+    {
+        "id": "mountain-curve",
+        "label": "Mountain curve",
+        "caption": "Empty mountain road. CC0, StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/CVFA77QA7F.jpg",
+        "page": "https://stocksnap.io/photo/curve-curvedroad-CVFA77QA7F",
+        "license": "CC0",
+    },
+    {
+        "id": "red-rock-track",
+        "label": "Red rock track",
+        "caption": "Desert dirt track. CC0, StockSnap.",
+        "url": "https://cdn.stocksnap.io/img-thumbs/960w/OSDDRVNIFI.jpg",
+        "page": "https://stocksnap.io/photo/mountain-desert-OSDDRVNIFI",
         "license": "CC0",
     },
 ]
@@ -142,10 +149,11 @@ def _cache_starters() -> None:
         buf = io.BytesIO()
         out.save(buf, format="JPEG", quality=90)
         dest.write_bytes(buf.getvalue())
-    meta = [
-        {k: v for k, v in item.items() if k != "url"}
-        for item in STARTERS
-    ]
+    keep = {item["id"] for item in STARTERS}
+    for stale in CC0_DIR.glob("*.jpg"):
+        if stale.stem not in keep:
+            stale.unlink()
+    meta = [{k: v for k, v in item.items() if k != "url"} for item in STARTERS]
     (CC0_DIR / "manifest.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 

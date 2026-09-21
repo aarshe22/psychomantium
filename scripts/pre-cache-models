@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Idempotent prefetch of Hugging Face weights into ./data/hf-cache
+# (the host path Docker Compose bind-mounts at /data/hf-cache).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
+export HF_HOME="${HF_HOME:-$ROOT/data/hf-cache}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-$HF_HOME/hub}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
+export DIFFUSERS_CACHE="${DIFFUSERS_CACHE:-$HF_HOME/diffusers}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
+export HF_XET_CACHE="${HF_XET_CACHE:-$HF_HOME/xet}"
+export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN:-}}"
+
+# Empty proxy keys in .env would otherwise override a working environment proxy.
+for _proxy_var in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy; do
+  if [[ -z "${!_proxy_var:-}" ]]; then
+    unset "${_proxy_var}" 2>/dev/null || true
+  fi
+done
+unset _proxy_var
+if [[ -n "${HTTP_PROXY:-}" && -z "${http_proxy:-}" ]]; then
+  export http_proxy="$HTTP_PROXY"
+fi
+if [[ -n "${HTTPS_PROXY:-}" && -z "${https_proxy:-}" ]]; then
+  export https_proxy="$HTTPS_PROXY"
+elif [[ -n "${HTTP_PROXY:-}" && -z "${HTTPS_PROXY:-}" && -z "${https_proxy:-}" ]]; then
+  export HTTPS_PROXY="$HTTP_PROXY"
+  export https_proxy="$HTTP_PROXY"
+fi
+if [[ -n "${NO_PROXY:-}" && -z "${no_proxy:-}" ]]; then
+  export no_proxy="$NO_PROXY"
+fi
+
+mkdir -p \
+  "$HF_HOME/hub" \
+  "$HF_HOME/transformers" \
+  "$HF_HOME/diffusers" \
+  "$HF_HOME/datasets" \
+  "$HF_HOME/xet" \
+  "$ROOT/data/torch-cache" \
+  "$ROOT/data/xdg-cache" \
+  "$ROOT/data/outputs" \
+  "$ROOT/data/seeds"
+
+PY=(python3 "$ROOT/scripts/pre_cache_models.py" --hf-home "$HF_HOME" "$@")
+
+if python3 -c "import huggingface_hub" >/dev/null 2>&1; then
+  exec "${PY[@]}"
+fi
+
+if command -v docker >/dev/null 2>&1; then
+  echo "huggingface_hub not on host; using a one-shot python:3.12-slim container" >&2
+  docker_env=(
+    -e HF_HOME=/data/hf-cache
+    -e HF_HUB_CACHE=/data/hf-cache/hub
+    -e HUGGINGFACE_HUB_CACHE=/data/hf-cache/hub
+    -e TRANSFORMERS_CACHE=/data/hf-cache/transformers
+    -e DIFFUSERS_CACHE=/data/hf-cache/diffusers
+    -e HF_DATASETS_CACHE=/data/hf-cache/datasets
+    -e HF_XET_CACHE=/data/hf-cache/xet
+    -e HF_TOKEN="${HF_TOKEN:-}"
+    -e HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-}"
+  )
+  for _proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy ALL_PROXY all_proxy; do
+    if [[ -n "${!_proxy_var:-}" ]]; then
+      docker_env+=(-e "${_proxy_var}=${!_proxy_var}")
+    fi
+  done
+  unset _proxy_var
+  docker run --rm \
+    --network host \
+    "${docker_env[@]}" \
+    -v "$HF_HOME:/data/hf-cache" \
+    -v "$ROOT/scripts:/opt/psychomantium-scripts:ro" \
+    python:3.12-slim \
+    bash -lc 'pip install -q huggingface_hub && python /opt/psychomantium-scripts/pre_cache_models.py --hf-home /data/hf-cache '"$(printf '%q ' "$@")"
+  exit $?
+fi
+
+echo "Need huggingface_hub (python3 -m pip install huggingface_hub) or Docker." >&2
+exit 1

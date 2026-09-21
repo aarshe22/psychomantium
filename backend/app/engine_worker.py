@@ -672,16 +672,20 @@ class EngineWorker:
                 pass
         decoded = engine.append_frame(seed)
         self.try_set_prompt()
+        frames = decoded.detach().to("cpu").numpy()
+        self.last_frames = frames
+        self._publish_batch(frames, gen_ms=0.0, kind="seed")
+        self.frames_done += int(frames.shape[0])
         from world_engine import CtrlInput
 
         try:
             warm = engine.gen_frame(ctrl=CtrlInput())
             frames = warm.detach().to("cpu").numpy()
+            self.last_frames = frames
+            self._publish_batch(frames, gen_ms=0.0, kind="generated")
+            self.frames_done += int(frames.shape[0])
         except Exception:
-            frames = decoded.detach().to("cpu").numpy()
-        self.last_frames = frames
-        self._publish_batch(frames, gen_ms=0.0, kind="seed")
-        self.frames_done += int(frames.shape[0])
+            pass
         return {"ok": True, "prompt_applied": False, "reason": "prompt_conditioning is null on this checkpoint"}
 
     def request_seed_reset(self) -> dict[str, Any]:
@@ -1012,7 +1016,7 @@ class EngineWorker:
                 self.inpaint_progress = 0.0
                 self._publish_inpaint_progress(0.0)
                 authoring.load()
-            self._idle_inpaint_on_gpu(modifier=self.composed_prompt() or None)
+            self._idle_inpaint_on_gpu()
             self._inpainted_this_idle = True
             return True
         except Exception as exc:

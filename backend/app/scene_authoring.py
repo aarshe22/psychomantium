@@ -417,7 +417,8 @@ class SceneAuthoring:
     DETAIL_PROMPT = (
         "Increase photorealistic detail, texture, materials, and lighting of this first-person view. "
         "Keep the same camera angle, composition, and layout. "
-        "Empty unarmed hands. Remove any weapon, hammer, tool, or held object. "
+        "Do not add people, hands, weapons, tools, or any held object. "
+        "Do not change this place into a different location. "
         "Do not add subjects. Keep everything else unchanged."
     )
 

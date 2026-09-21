@@ -58,6 +58,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [loadingModel, setLoadingModel] = useState(true);
   const [deliveredFps, setDeliveredFps] = useState(0);
+  const [hasFrame, setHasFrame] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [saved, setSaved] = useState(true);
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -278,6 +279,7 @@ export default function App() {
         pacer = new FramePacer((frame) => {
           const url = URL.createObjectURL(frame.blob);
           if (imgRef.current) imgRef.current.src = url;
+          setHasFrame(true);
           if (lastUrl.current) URL.revokeObjectURL(lastUrl.current);
           lastUrl.current = url;
           const now = performance.now();
@@ -299,6 +301,7 @@ export default function App() {
       return;
     }
     setError(null);
+    pacerRef.current?.reset();
     setDreaming(true);
     await fetch("/api/preferences", {
       method: "PUT",
@@ -740,7 +743,7 @@ export default function App() {
               <form onSubmit={enterDream}>
                 <p className="fine">
                   Waypoint continues from a <strong>photoreal first-person still</strong>. Upload a photograph,
-                  pick a royalty-free street or landscape still, or paint one with Klein from the standing prompt.
+                  pick a CC0 path or road still, or paint one with Klein from the standing prompt.
                 </p>
                 <label className="file">
                   Your photograph (best prior)
@@ -824,7 +827,7 @@ export default function App() {
                 </button>
                 {gallery.length > 0 && (
                   <>
-                    <p className="fine">Cached Klein seeds and royalty-free stills</p>
+                    <p className="fine">Cached Klein seeds and CC0 stills</p>
                     <div className="seed-grid">
                     {gallery.map((s) => (
                       <div key={s.id} className="seed-wrap">
@@ -991,12 +994,90 @@ export default function App() {
 
         <main className="stage-main">
           <div
-            className="viewport"
+            className={`viewport ${hasFrame ? "" : "idle"}`.trim()}
             onClick={onViewportClick}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <img ref={imgRef} alt="Dream viewport" />
-            {!dreaming && <div className="veil">Pick a start frame, then enter.</div>}
+            <img ref={imgRef} alt="Dream viewport" className={hasFrame ? undefined : "is-empty"} />
+            {!hasFrame && (
+              <div className="get-started">
+                <div className="get-started-inner">
+                  <p className="eyebrow">Get started</p>
+                  <h2>Psychomantium</h2>
+                  <p>
+                    A locally generated lucid-dream sketch. You choose a first-person still; a world model on this
+                    machine continues that view as you look and walk. It is not a diagnosis and not a map of you.
+                    On the loaded Waypoint 1B checkpoint, typed text does not drive the DiT — movement and the
+                    current pixels do. Klein inpaint is how an intention edits the view you are in.
+                  </p>
+
+                  <h3>Start a dream</h3>
+                  <ol>
+                    <li>
+                      Wait until the top bar says <strong>model ready</strong>.
+                    </li>
+                    <li>
+                      In <strong>Session</strong>, pick a CC0 still, upload a photograph, paint from the
+                      standing prompt, or type a one-liner and <strong>Create seed</strong>.
+                    </li>
+                    <li>
+                      Optional: edit the standing world prompt. Defaults are unarmed exploration.
+                    </li>
+                    <li>
+                      Click <strong>Start Dreaming</strong>. Live frames replace this card. <strong>Stop</strong>{" "}
+                      ends the session; while it winds down the button reads <strong>Stopping</strong>, then{" "}
+                      <strong>Stopped</strong>.
+                    </li>
+                  </ol>
+
+                  <h3>Top bar</h3>
+                  <dl className="ctl">
+                    <dt>session</dt>
+                    <dd>RUNNING while generating. NOT RUNNING when idle.</dd>
+                    <dt>model</dt>
+                    <dd>Waypoint 1B at 360p or 720p. Switching reloads weights.</dd>
+                    <dt>gpu</dt>
+                    <dd>SM utilization from this machine.</dd>
+                    <dt>fps</dt>
+                    <dd>Click to lock ~30 fps, or leave uncapped.</dd>
+                    <dt>Auto-InPaint</dt>
+                    <dd>
+                      When on, standing still lets FLUX.2 Klein refine the current frame. Walking continues from
+                      those pixels. Fill is progress while Klein runs.
+                    </dd>
+                  </dl>
+
+                  <h3>Left rail</h3>
+                  <dl className="ctl">
+                    <dt>Session</dt>
+                    <dd>
+                      Seed the dream. Pin keeps the rail open; Hide collapses it. Reset seed (U) returns to the
+                      original still.
+                    </dd>
+                    <dt>Intention</dt>
+                    <dd>
+                      <strong>Send Intention</strong> Klein-inpaints the view where you are now, then appends that
+                      line to the session standing prompt. Lines stack; they are discarded on Stop and are not
+                      saved in preferences.
+                    </dd>
+                    <dt>Navigate</dt>
+                    <dd>
+                      W walk · Z back · arrows look/turn · Space jump · nav ball look (and walk if the knob is on)
+                      · Reset view (R) to the horizon. Click the dream for mouse-look; Esc releases the pointer.
+                    </dd>
+                    <dt>Knobs</dt>
+                    <dd>
+                      Stream resolution, temperature, look sensitivity, JPEG quality, idle wander, motion
+                      smoothing, dream sharpness. Save writes preferences; Reset to Defaults restores the knob
+                      fields.
+                    </dd>
+                    <dt>Diagnostics</dt>
+                    <dd>Generation fps, VRAM, composed prompt, and whether set_prompt is wired (it is not on 1B).</dd>
+                  </dl>
+                </div>
+              </div>
+            )}
+            {hasFrame && !dreaming && <div className="veil">Stopped. Start Dreaming to continue from a seed.</div>}
           </div>
           <p className="help">
             W walk forward · Z walk back · ← → turn · ↑ ↓ look · R reset to horizon · U reset seed · Space jump ·
