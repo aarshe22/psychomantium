@@ -54,7 +54,7 @@ h1 {
   background: transparent;
   font: inherit;
   color: inherit;
-  min-width: 5.4rem;
+  min-width: 7.2rem;
 }
 .pill.metric.toggle.on { border-color: var(--ember); }
 .pill.metric.toggle.on .metric-k { color: var(--ember); }

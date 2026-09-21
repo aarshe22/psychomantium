@@ -35,15 +35,15 @@ See README. Resolution above 360p is **stream upscale**, not a 720p model swap. 
 | Daytime / brighter | transform | Brighten + re-seed | if luminance rises >5% |
 | Stop flying / clear | meta | Clears ongoing holds | n/a |
 | forget that / clear world | world | Drops extra spoken world lines; standing pre-prompt stays | n/a |
-| Anything else | world | Standing world rule, composed with the Session pre-prompt | never auto-verified |
+| Anything else | world | Klein inpaint of the current still (spoken modifier + standing prompt) | n/a |
 
-Statuses: `received` → `submitted` (engine API called) → `visually_verified` only if the statistic above fires. Unmatched Speak lines stay `submitted` as world rules. `failed` is reserved for engine errors on the transform path.
+Statuses: `received` → `submitted` (engine API called) → `visually_verified` only if the statistic above fires. Unmatched Speak lines stay `submitted` as world rules and also Klein-inpaint the current still. `failed` is reserved for engine errors on the transform or Klein path.
 
 The Session **standing world prompt** is stored and shown. On this 1B checkpoint it is **not** DiT conditioning (`prompt_conditioning=null`). [Biome](https://github.com/Overworldai/Biome) uses the same honesty: its prompt notification resets the engine and ignores the text. Visual quality is the **start frame** (gallery or upload) plus movement. A warmup `gen_frame` runs after the seed so the first walk is not a compile hitch.
 
 ## Scene authoring
 
-Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium can paint a start frame with Klein from the standing prompt (`POST /api/seeds/paint`) and, with **InPaint** on, refine the current view while you stand still. Color-grade Speak lines (night/forest/day) remain pixel reseeds of the last frames, not language understanding.
+Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium can paint a start frame with Klein from the standing prompt (`POST /api/seeds/paint`). **Speak** always Klein-inpaints the current still with that sentence as the modifier, whether or not **Auto-InPaint** is on. Auto-InPaint only refines detail while you stand still. Color-grade Speak lines (night/forest/day) still reseed if Klein is skipped; when Klein runs they are applied as the inpaint modifier instead.
 
 ## Known limitations
 

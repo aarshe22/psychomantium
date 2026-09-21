@@ -130,12 +130,11 @@ def parse_intention(text: str, next_id: int) -> Intention:
 
     # Anything else becomes a standing world rule, not a failure.
     intent.kind = "world"
-    intent.status = "submitted"
+    intent.status = "received"
     intent.active = True
-    intent.engine_action = "scene authoring (Gemma + FLUX.2 Klein reseed)"
+    intent.engine_action = "Klein inpaint of current still (spoken modifier)"
     intent.note = (
-        "Standing world rule. Waypoint-1.5-1B cannot condition on text; when scene "
-        "authoring is loaded, Gemma writes a Klein prompt and FLUX.2-klein-4B paints "
-        "a new first-person seed, then the world model continues from those pixels."
+        "Spoken line modifies the current first-person still via FLUX.2 Klein, then "
+        "Waypoint continues from those pixels. Independent of Auto-InPaint."
     )
     return intent

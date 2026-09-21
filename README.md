@@ -101,7 +101,7 @@ Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B`
 - Session: upload a photograph (best prior), public Overworld photoreal starters, or paint a seed with FLUX.2 Klein from the standing prompt
 - Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
 - Movement keys are ignored while the intention/prompt fields are focused
-- **Enter** in the intention field submits
+- **Enter** in the intention field submits; that line inpaints the current still (Klein), even if Auto-InPaint is off
 - Mouse scroll wheel is ignored (not sent as `CtrlInput.scroll_wheel`)
 
 ## Experience knobs
@@ -118,7 +118,7 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 | Motion smoothing | Exponential blend on look |
 | Dream sharpness | Remaps the 4-step noise schedule (same step count; compiled graph stays valid) |
 
-**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. Use **Paint seed from prompt** (FLUX.2 Klein) or **InPaint** while idle so language becomes pixels, then Waypoint continues from that seed.
+**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. **Speak** always runs FLUX.2 Klein on the current still using the standing prompt plus the intention as the edit modifier (Auto-InPaint does not have to be on). **Auto-InPaint** is idle-only: stand still and Klein refines detail with a fixed prompt. **Paint seed from prompt** paints a start frame before you enter.
 
 The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch interval (EMA), instead of flashing all four at once. Click the FPS badge to cap at 30 or uncap.
 

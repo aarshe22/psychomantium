@@ -178,6 +178,8 @@ class EngineWorker:
         self.inpaint_status = "off"
         self._idle_batches = 0
         self._inpainted_this_idle = False
+        self._intent_inpaint_pending: Optional[str] = None
+        self._intent_inpaint_id: Optional[int] = None
 
     def _gpu_call(self, op: str, *args, wait: bool = True):
         box: dict[str, Any] = {"err": None, "result": None}
@@ -499,6 +501,25 @@ class EngineWorker:
                 self.intentions = self.intentions[-40:]
             if intent.kind == "world":
                 self._prompt_dirty = True
+            if (
+                self.session_active
+                and intent.active
+                and intent.kind in {"world", "transform", "ongoing", "unknown"}
+            ):
+                self._intent_inpaint_pending = intent.raw
+                self._intent_inpaint_id = intent.id
+                if "Klein inpaint" not in (intent.engine_action or ""):
+                    intent.engine_action = (
+                        f"{intent.engine_action}; Klein inpaint of current still"
+                        if intent.engine_action
+                        else "Klein inpaint of current still"
+                    )
+                if "inpaint modifier" not in (intent.note or "").lower():
+                    extra = (
+                        "Spoken line is the inpaint modifier on the current frame, "
+                        "independent of Auto-InPaint."
+                    )
+                    intent.note = f"{intent.note} {extra}".strip() if intent.note else extra
             return intent
 
     def _merged_ctrl(self):
@@ -624,6 +645,8 @@ class EngineWorker:
             self._seed_reset_pending = False
             self._idle_batches = 0
             self._inpainted_this_idle = False
+            self._intent_inpaint_pending = None
+            self._intent_inpaint_id = None
             self.inpaint_status = "armed" if bool(self.prefs.get("inpaint", False)) else "off"
         try:
             return self._gpu_call("start", seed)
@@ -720,6 +743,8 @@ class EngineWorker:
             return
         frames = self.last_frames
         for intent in pending:
+            if intent.id == self._intent_inpaint_id and self._intent_inpaint_pending:
+                continue
             try:
                 graded = color_grade(frames, intent.transform)
                 self.pre_transform_stats = {
@@ -852,14 +877,14 @@ class EngineWorker:
                     return True
         return False
 
-    def _idle_inpaint_on_gpu(self) -> None:
+    def _idle_inpaint_on_gpu(self, modifier: str | None = None) -> None:
         engine = self.engine
         frames = self.last_frames
         if engine is None or frames is None or frames.size == 0:
             return
         self.inpaint_status = "running"
         self._publish_batch(frames, gen_ms=0.0, kind="inpaint")
-        pil, _prompt = authoring.refine_frame(frames[-1], self.frame_size)
+        pil, _prompt = authoring.refine_frame(frames[-1], self.frame_size, user_request=modifier)
         arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
         stacked = np.repeat(arr[None, ...], 4, axis=0)
         seed = torch.from_numpy(np.ascontiguousarray(stacked))
@@ -870,6 +895,47 @@ class EngineWorker:
         self.original_seed = seed.detach().clone()
         self.inpaint_status = "done"
         self._publish_batch(out, gen_ms=0.0, kind="inpaint")
+
+    def _maybe_directed_inpaint(self) -> bool:
+        """Speak → Klein edit of the current still. Ignores the Auto-InPaint toggle."""
+        with self.lock:
+            text = (self._intent_inpaint_pending or "").strip()
+            intent_id = self._intent_inpaint_id
+            standing = str(self.prefs.get("world_prompt") or "").strip()
+            note = str(self.prefs.get("initial_note") or "").strip()
+            if text:
+                self._intent_inpaint_pending = None
+        if not text:
+            return False
+        if self.last_frames is None or self.engine is None:
+            with self.lock:
+                if not (self._intent_inpaint_pending or "").strip():
+                    self._intent_inpaint_pending = text
+                    self._intent_inpaint_id = intent_id
+            return False
+        modifier = ". ".join(part for part in (standing, note, text) if part)
+        intent = next((i for i in self.intentions if i.id == intent_id), None)
+        try:
+            if authoring.pipeline is None:
+                self.inpaint_status = "loading"
+                if self.last_frames is not None:
+                    self._publish_batch(self.last_frames, gen_ms=0.0, kind="inpaint")
+                authoring.load()
+            self._idle_inpaint_on_gpu(modifier=modifier)
+            self._inpainted_this_idle = True
+            if intent is not None:
+                if intent.status != "failed":
+                    intent.status = "submitted"
+                intent.engine_action = "Klein inpaint of current still (spoken modifier)"
+            return True
+        except Exception as exc:
+            self.inpaint_status = "error"
+            self._inpainted_this_idle = True
+            self.last_error = f"inpaint: {type(exc).__name__}: {exc}"
+            if intent is not None:
+                intent.status = "failed"
+                intent.note = f"{intent.note} | Klein error: {exc}".strip(" |")
+            return False
 
     def _maybe_idle_inpaint(self) -> bool:
         if not bool(self.prefs.get("inpaint", False)):
@@ -925,6 +991,8 @@ class EngineWorker:
                 if self._prompt_dirty:
                     self.try_set_prompt()
                     self._prompt_dirty = False
+                if self._maybe_directed_inpaint():
+                    continue
                 if self._maybe_idle_inpaint():
                     continue
                 for intent in self.intentions:

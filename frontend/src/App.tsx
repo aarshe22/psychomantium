@@ -579,24 +579,24 @@ export default function App() {
             className={`pill metric toggle ${prefs.inpaint ? "on" : ""}`}
             title={
               prefs.inpaint
-                ? "Idle inpaint on. Stand still and FLUX.2 Klein will refine this frame; walking continues from the detailed seed."
-                : "Idle inpaint off. Click to refine the current view with FLUX.2 Klein whenever you stand still."
+                ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Speak always inpaints, even if this is off."
+                : "Auto-InPaint off. Idle standing still will not refine. Speak still inpaints the current view with your intention."
             }
             aria-pressed={prefs.inpaint}
             onClick={toggleInpaint}
           >
-            <span className="metric-k">InPaint</span>
+            <span className="metric-k">Auto-InPaint</span>
             <strong>
-              {!prefs.inpaint
-                ? "off"
-                : stats.inpaint_status === "loading"
-                  ? "load"
-                  : stats.inpaint_status === "running"
-                    ? "…"
-                    : stats.inpaint_status === "done"
-                      ? "ok"
-                      : stats.inpaint_status === "error"
-                        ? "err"
+              {stats.inpaint_status === "loading"
+                ? "load"
+                : stats.inpaint_status === "running"
+                  ? "…"
+                  : stats.inpaint_status === "error"
+                    ? "err"
+                    : !prefs.inpaint
+                      ? "off"
+                      : stats.inpaint_status === "done"
+                        ? "ok"
                         : stats.inpaint_status === "armed"
                           ? "on"
                           : "on"}
@@ -706,7 +706,7 @@ export default function App() {
                 )}
                 <div className="row">
                   <button type="submit" disabled={!ready || (!file && !seedId) || painting}>
-                    Enter dream
+                    Start Dreaming
                   </button>
                   <button type="button" className="ghost" onClick={stopDream} disabled={!dreaming}>
                     Stop
@@ -730,11 +730,11 @@ export default function App() {
                       typingRef.current = false;
                       clearKeys();
                     }}
-                    placeholder="I can fly.  More buildings.  forget that"
+                    placeholder="More buildings. A river to the left. forget that"
                   />
                 </label>
-                <button type="submit" disabled={!dreaming}>
-                  Speak
+                <button type="submit" disabled={!dreaming || stats.inpaint_status === "running" || stats.inpaint_status === "loading"}>
+                  {stats.inpaint_status === "running" || stats.inpaint_status === "loading" ? "Inpainting…" : "Speak"}
                 </button>
               </form>
               <ul className="intents">

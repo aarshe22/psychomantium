@@ -389,15 +389,34 @@ class SceneAuthoring:
         "Do not add or remove subjects. Keep everything else unchanged."
     )
 
-    def refine_frame(self, frame: np.ndarray, size_wh: tuple[int, int]) -> tuple[Image.Image, str]:
-        """Klein edit of the current view. No VLM — fixed detail prompt for idle inpaint."""
+    def refine_frame(
+        self,
+        frame: np.ndarray,
+        size_wh: tuple[int, int],
+        user_request: str | None = None,
+    ) -> tuple[Image.Image, str]:
+        """Klein edit of the current view. No VLM.
+
+        Idle Auto-InPaint uses DETAIL_PROMPT. Spoken intentions pass user_request as
+        a modifier on the standing still.
+        """
         if self.pipeline is None:
             raise AuthoringNotReady(self.error or "Klein pipeline not loaded")
         w, h = size_wh
         pil = Image.fromarray(np.asarray(frame)).convert("RGB")
         th, tw = self._align(pil.height, pil.width)
         resized = pil.resize((tw, th), Image.Resampling.LANCZOS)
-        prompt = self.DETAIL_PROMPT
+        text = (user_request or "").strip()
+        if text:
+            prompt = (
+                "Photoreal first-person screenshot, eye-level, natural lighting, detailed materials. "
+                "Keep the same camera angle and overall layout of this view. "
+                f"Apply this change: {text}. "
+                "A handheld object in the bottom-right of the frame, FPS view. "
+                "No text overlay, no UI chrome."
+            )
+        else:
+            prompt = self.DETAIL_PROMPT
         result = self.run_klein(resized, prompt, th, tw)
         return result.resize((w, h), Image.Resampling.LANCZOS), prompt
 
