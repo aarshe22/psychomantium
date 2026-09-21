@@ -397,6 +397,11 @@ class EngineWorker:
 
     def _load_engine(self) -> None:
         t0 = time.perf_counter()
+        # Blackwell + world_engine's torch.compile (triton cudagraphs) indexes
+        # the 5-sigma Euler ladder out of range (device-side assert `tmp21 < 5`),
+        # kills the worker, and 502/503s the UI so WASD never reaches a live loop.
+        os.environ["TORCH_COMPILE_DISABLE"] = "1"
+        torch._dynamo.config.disable = True
         import world_engine.world_engine as we
         from world_engine import WorldEngine
 
@@ -515,29 +520,16 @@ class EngineWorker:
         engine.gen_frame = types.MethodType(gen_frame, engine)
 
     def _apply_scheduler(self, engine) -> None:
-        """Only safe before torch.compile / CUDA graphs capture.
+        """Keep the checkpoint sigma ladder.
 
-        Lerp the checkpoint's own sigma ladder. A hardcoded 360p curve used to
-        overwrite 720p's [1, 0.9, 0.75, 0.3, 0] and could NaN the compiled Euler
-        step (device-side assert on the next CUDA sync).
+        Rewriting interior sigmas (dream sharpness) caused CUDA device-side
+        asserts on both 1B 720p and 1.1 Small after torch.compile. The slider
+        stays in prefs/UI; it is not remapped onto Euler until there is a
+        per-checkpoint table that is known-safe.
         """
         if engine is None or self._sigma_base is None:
             return
-        sharp = float(self.prefs.get("dream_sharpness", 0.45))
-        base = self._sigma_base
-        if abs(sharp - 0.45) < 0.02:
-            engine.scheduler_sigmas.copy_(base)
-            return
-        t = float(max(-1.0, min(1.0, (sharp - 0.45) / 0.55)))
-        if t < 0:
-            mild = base.clone()
-            mild[:-1] = torch.minimum(mild[:-1] + (-t) * 0.08 * (1.0 - mild[:-1]), mild.new_tensor(1.0))
-            engine.scheduler_sigmas.copy_(mild)
-            return
-        wild = base.clone()
-        if wild.numel() > 2:
-            wild[1:-1] = wild[1:-1] * (1.0 - 0.55 * t)
-        engine.scheduler_sigmas.copy_(wild)
+        engine.scheduler_sigmas.copy_(self._sigma_base)
 
     def _request_cuda_restart(self, reason: str) -> None:
         self.last_error = reason
@@ -758,11 +750,9 @@ class EngineWorker:
         if "down" in arrows:
             mouse[1] += 0.22 * sens
 
-        if self._freeze_walk:
-            buttons.discard(87)
-            buttons.discard(83)
-            if abs(analog[1]) > 0.18 and analog[1] < -0.18:
-                buttons.discard(87)
+        # Texture-lock can still trigger a Klein/open-memory rescue, but must not
+        # eat WASD: dirt paths and packed foliage look "locked" to the metric and
+        # that used to freeze walking for the rest of the session.
 
         if prefs.get("steer_move") and not self._freeze_walk:
             mag = (analog[0] ** 2 + analog[1] ** 2) ** 0.5
@@ -1023,9 +1013,11 @@ class EngineWorker:
     def note_client(self, delta: int) -> None:
         with self.lock:
             self.clients = max(0, self.clients + delta)
-            if self.clients == 0 and self.session_active:
+            if self.clients == 0 and self.session_active and self.bootstrap_phase == "live":
                 self.disconnect_deadline = time.time() + config.DISCONNECT_GRACE_SEC
             elif self.clients > 0:
+                self.disconnect_deadline = None
+            else:
                 self.disconnect_deadline = None
 
     def snapshot(self) -> Optional[str]:
@@ -1223,7 +1215,8 @@ class EngineWorker:
             "open": bool(m.open) if m is not None else False,
             "event": self._last_scene_event,
             "open_memories": len(self._open_seeds),
-            "walk_held": self._freeze_walk,
+            "walk_held": 87 in self.controls.buttons or 83 in self.controls.buttons,
+            "walk_frozen": self._freeze_walk,
         }
 
     def _note_open_frame(self, frames: np.ndarray | None) -> None:

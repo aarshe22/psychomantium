@@ -37,7 +37,7 @@ From `/opt/psychomantium`. This host’s outbound HTTP proxy is not reachable at
 docker compose up --build
 ```
 
-Wait until `GET http://127.0.0.1:8791/ready` returns 200 (model download + load). `GET /health` only means the HTTP server is up.
+Wait until `GET http://127.0.0.1:8791/ready` JSON has `"ready": true` (model download + load). `GET /health` only means the HTTP server is up. `/ready` stays HTTP 200 while loading so the UI does not flood the browser console.
 
 - UI: http://127.0.0.1:8790 or http://10.1.1.100:8790
 - API: http://127.0.0.1:8791 or http://10.1.1.100:8791
@@ -126,7 +126,7 @@ The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch i
 
 | Symptom | What to check |
 |---|---|
-| `/health` ok, `/ready` 503 | model still downloading/loading; `docker compose logs backend` |
+| `/health` ok, `/ready` has `"ready": false` | model still downloading/loading; `docker compose logs backend` |
 | CUDA / GPU errors | another process using the GPU is fine if VRAM remains; do not kill unrelated jobs |
 | Hugging Face download stalls | this host uses an HTTP proxy; Compose forwards `HTTP_PROXY`/`HTTPS_PROXY` |
 | First batches very slow | `torch.compile` warmup; generation FPS in diagnostics ignores UI interpolation |

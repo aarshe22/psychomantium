@@ -65,10 +65,9 @@ def health():
 
 @app.get("/ready")
 def ready():
-    body = worker.readiness()
-    if not worker.ready:
-        return JSONResponse(body, status_code=503)
-    return body
+    """Always 200 so the UI poll does not spam 503 in the browser console.
+    Readiness is in JSON: ready / loading / bootstrap_phase."""
+    return worker.readiness()
 
 
 @app.get("/api/status")

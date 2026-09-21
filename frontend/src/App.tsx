@@ -152,6 +152,10 @@ export default function App() {
   const resetSeedRef = useRef<() => void>(() => undefined);
   const pacerRef = useRef<FramePacer | null>(null);
   const stoppingRef = useRef(false);
+  const dreamingRef = useRef(false);
+  const wsAliveRef = useRef(true);
+  const wsRetryRef = useRef<number | null>(null);
+  dreamingRef.current = dreaming;
 
   useEffect(() => {
     try {
@@ -206,7 +210,7 @@ export default function App() {
     let stop = false;
     const poll = async () => {
       try {
-        const r = await fetch("/ready");
+        const r = await fetch("/api/status");
         const body = (await r.json()) as Stats & { error?: string | null };
         if (stop) return;
         setApiUp(true);
@@ -261,14 +265,25 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (typingRef.current) return;
+      if (typingRef.current) {
+        if (!dreamingRef.current) return;
+        if (e.code === "Space" || e.code.startsWith("Arrow") || e.code === "KeyR" || e.code === "KeyU") return;
+      }
       if (e.code === "KeyW") {
         e.preventDefault();
         keysRef.current.add(KEY.W);
       }
-      if (e.code === "KeyZ") {
+      if (e.code === "KeyS" || e.code === "KeyZ") {
         e.preventDefault();
         keysRef.current.add(KEY.S);
+      }
+      if (e.code === "KeyA") {
+        e.preventDefault();
+        keysRef.current.add(KEY.A);
+      }
+      if (e.code === "KeyD") {
+        e.preventDefault();
+        keysRef.current.add(KEY.D);
       }
       if (e.code === "Space") {
         e.preventDefault();
@@ -301,7 +316,9 @@ export default function App() {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === "KeyW") keysRef.current.delete(KEY.W);
-      if (e.code === "KeyZ") keysRef.current.delete(KEY.S);
+      if (e.code === "KeyS" || e.code === "KeyZ") keysRef.current.delete(KEY.S);
+      if (e.code === "KeyA") keysRef.current.delete(KEY.A);
+      if (e.code === "KeyD") keysRef.current.delete(KEY.D);
       if (e.code === "Space") keysRef.current.delete(KEY.SPACE);
       if (e.code === "ArrowLeft") arrowsRef.current.delete("left");
       if (e.code === "ArrowRight") arrowsRef.current.delete("right");
@@ -324,6 +341,14 @@ export default function App() {
   }, [clearKeys]);
 
   const connectWs = useCallback(() => {
+    const existing = wsRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    if (wsRetryRef.current != null) {
+      window.clearTimeout(wsRetryRef.current);
+      wsRetryRef.current = null;
+    }
     setConn("connecting");
     const ws = new WebSocket(wsUrl());
     ws.binaryType = "arraybuffer";
@@ -331,8 +356,11 @@ export default function App() {
     ws.onopen = () => setConn("live");
     ws.onerror = () => setConn("error");
     ws.onclose = () => {
+      if (wsRef.current === ws) wsRef.current = null;
       setConn("closed");
-      wsRef.current = null;
+      if (wsAliveRef.current) {
+        wsRetryRef.current = window.setTimeout(() => connectWs(), 800);
+      }
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
@@ -365,6 +393,21 @@ export default function App() {
       pacer.ingest(packed);
     };
   }, []);
+
+  useEffect(() => {
+    wsAliveRef.current = true;
+    connectWs();
+    return () => {
+      wsAliveRef.current = false;
+      if (wsRetryRef.current != null) {
+        window.clearTimeout(wsRetryRef.current);
+        wsRetryRef.current = null;
+      }
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws?.close();
+    };
+  }, [connectWs]);
 
   async function enterDream(e: FormEvent) {
     e.preventDefault();
@@ -1256,7 +1299,7 @@ export default function App() {
                     </dd>
                     <dt>Navigate</dt>
                     <dd>
-                      W walk · Z back · arrows look/turn · Space jump · wheel look-out from a close surface ·
+                      WASD walk · arrows look/turn · Space jump · wheel look-out from a close surface ·
                       nav ball look (and walk if the knob is on) · Reset view (R) to the horizon. Click the
                       dream for mouse-look; Esc releases the pointer.
                     </dd>
@@ -1277,7 +1320,7 @@ export default function App() {
             {hasFrame && !dreaming && <div className="veil">Stopped. Start Dreaming to continue from a seed.</div>}
           </div>
           <p className="help">
-            W walk forward · Z walk back · ← → turn · ↑ ↓ look · wheel look-out · R horizon · U last open view ·
+            WASD walk · ← → turn · ↑ ↓ look · wheel look-out · R horizon · U last open view ·
             Space jump · click dream to mouse-look · Esc releases lock
           </p>
         </main>

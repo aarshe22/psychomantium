@@ -48,4 +48,4 @@ EXPOSE 8791
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=10 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/health', timeout=4)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8791", "--ws-ping-interval", "20", "--ws-ping-timeout", "60"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8791", "--ws-ping-interval", "20", "--ws-ping-timeout", "600"]
