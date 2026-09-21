@@ -6,6 +6,10 @@ export type Prefs = {
   wander: number;
   motion_smoothing: number;
   dream_sharpness: number;
+  drift_delay: number;
+  drift_interval: number;
+  drift_strength: number;
+  drift_steps: number;
   steer_move: boolean;
   initial_note: string;
   world_prompt: string;
@@ -78,6 +82,38 @@ export const PREF_FIELDS: {
     step: 0.05,
     hint: "Remaps the 4-step noise schedule. Takes effect on engine load and when you enter a new dream (not mid-stream; CUDA graphs).",
   },
+  {
+    key: "drift_delay",
+    label: "Dream drift delay",
+    min: 1,
+    max: 20,
+    step: 1,
+    hint: "Seconds standing still before Klein first continues the dream. Dream drift must be on.",
+  },
+  {
+    key: "drift_interval",
+    label: "Dream drift interval",
+    min: 0,
+    max: 45,
+    step: 1,
+    hint: "Seconds between further idle drifts. 0 = once per standstill; move again to arm another.",
+  },
+  {
+    key: "drift_strength",
+    label: "Dream drift strength",
+    min: 0.1,
+    max: 1,
+    step: 0.05,
+    hint: "How far idle Klein may take the view. Low keeps this place; high leans into an adjacent dream. Mixes the new frame with the current one.",
+  },
+  {
+    key: "drift_steps",
+    label: "Dream drift steps",
+    min: 2,
+    max: 8,
+    step: 1,
+    hint: "Klein denoising steps for idle drift only. More steps cost GPU time and usually change more. Send Intention still uses 4.",
+  },
 ];
 
 type Props = {
@@ -106,7 +142,15 @@ export default function Knobs({ prefs, saved, onChange, onSave, onReset }: Props
             <strong>
               {f.key === "resolution"
                 ? `${prefs.resolution}p`
-                : Number(prefs[f.key]).toFixed(f.step < 1 ? 2 : 0)}
+                : f.key === "drift_delay"
+                  ? `${prefs.drift_delay}s`
+                  : f.key === "drift_interval"
+                    ? prefs.drift_interval <= 0
+                      ? "once"
+                      : `${prefs.drift_interval}s`
+                    : f.key === "drift_steps"
+                      ? String(prefs.drift_steps)
+                      : Number(prefs[f.key]).toFixed(f.step < 1 ? 2 : 0)}
             </strong>
           </span>
           <input

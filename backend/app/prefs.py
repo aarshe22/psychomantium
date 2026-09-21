@@ -19,6 +19,10 @@ DEFAULTS: dict[str, Any] = {
     "wander": 0.0,
     "motion_smoothing": 0.15,
     "dream_sharpness": 0.45,
+    "drift_delay": 5.0,
+    "drift_interval": 0.0,
+    "drift_strength": 0.55,
+    "drift_steps": 4,
     "steer_move": True,
     "initial_note": "An explorable dream",
     "world_prompt": DREAM_WORLD_PROMPT,
@@ -35,6 +39,10 @@ SPECS: dict[str, dict[str, float | str]] = {
     "wander": {"min": 0.0, "max": 0.3, "step": 0.01, "label": "Idle wander"},
     "motion_smoothing": {"min": 0.0, "max": 0.85, "step": 0.05, "label": "Motion smoothing"},
     "dream_sharpness": {"min": 0.0, "max": 1.0, "step": 0.05, "label": "Dream sharpness"},
+    "drift_delay": {"min": 1.0, "max": 20.0, "step": 1.0, "label": "Dream drift delay"},
+    "drift_interval": {"min": 0.0, "max": 45.0, "step": 1.0, "label": "Dream drift interval"},
+    "drift_strength": {"min": 0.1, "max": 1.0, "step": 0.05, "label": "Dream drift strength"},
+    "drift_steps": {"min": 2.0, "max": 8.0, "step": 1.0, "label": "Dream drift steps"},
 }
 
 
@@ -53,6 +61,10 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["wander"] = float(max(0.0, min(0.3, float(src["wander"]))))
     out["motion_smoothing"] = float(max(0.0, min(0.85, float(src["motion_smoothing"]))))
     out["dream_sharpness"] = float(max(0.0, min(1.0, float(src["dream_sharpness"]))))
+    out["drift_delay"] = float(max(1.0, min(20.0, round(float(src.get("drift_delay", 5.0))))))
+    out["drift_interval"] = float(max(0.0, min(45.0, round(float(src.get("drift_interval", 0.0))))))
+    out["drift_strength"] = float(max(0.1, min(1.0, float(src.get("drift_strength", 0.55)))))
+    out["drift_steps"] = int(max(2, min(8, round(float(src.get("drift_steps", 4))))))
     out["steer_move"] = bool(src.get("steer_move", True))
     note = str(src.get("initial_note") or DEFAULTS["initial_note"])[:400]
     out["initial_note"] = note
@@ -63,9 +75,21 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
         "There is a standard road grid, and buildings.",
         "There is a standard road grid, and buildings",
     }
+    low = world.lower()
+    migrated_body = any(
+        token in low
+        for token in (
+            "empty unarmed hands",
+            "empty hands",
+            "unarmed hands",
+            "no weapons",
+        )
+    )
     if migrated_road:
         world = DEFAULTS["world_prompt"]
         out["inpaint"] = True
+    elif migrated_body:
+        world = DEFAULTS["world_prompt"]
     out["world_prompt"] = world
     out["model_id"] = config.resolve_model(str(src.get("model_id") or DEFAULTS["model_id"]))
     native_h = config.frame_size_for(out["model_id"])[1]

@@ -48,6 +48,17 @@ h1 {
   min-width: 4.6rem;
   justify-content: center;
 }
+.pill.metric.bootstrap {
+  max-width: 16.5rem;
+  min-width: 8.5rem;
+  justify-content: flex-start;
+}
+.pill.metric.bootstrap strong {
+  font-size: 0.78rem;
+  line-height: 1.15;
+  white-space: normal;
+  text-align: left;
+}
 .pill.metric .metric-k { color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .pill.metric strong { font-weight: 600; font-size: 0.86rem; color: var(--mist); }
 .pill.metric.toggle {

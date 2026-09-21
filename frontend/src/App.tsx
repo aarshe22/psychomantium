@@ -23,10 +23,14 @@ const DEFAULT_PREFS: Prefs = {
   wander: 0.0,
   motion_smoothing: 0.15,
   dream_sharpness: 0.45,
+  drift_delay: 5,
+  drift_interval: 0,
+  drift_strength: 0.55,
+  drift_steps: 4,
   steer_move: true,
   initial_note: "An explorable dream",
   world_prompt:
-    "An imaginary first-person dream you can walk through. Eye-level, a path or clearing ahead, open sky when looking out. Empty unarmed hands. No weapons, tools, HUD, or text overlay.",
+    "An imaginary eye-level dream you can walk through. A path or clearing ahead, open sky when looking out. No HUD or text overlay.",
   model_id: "Overworld/Waypoint-1.5-1B-360P",
   fps_lock: false,
   inpaint: true,
@@ -38,6 +42,67 @@ function parseJson(text: string, fallback: string) {
   } catch {
     return { error: text.slice(0, 240) || fallback };
   }
+}
+
+function engineStatus(opts: {
+  apiUp: boolean;
+  ready: boolean;
+  loadingModel: boolean;
+  dreaming: boolean;
+  hasFrame: boolean;
+  conn: string;
+  stats: Stats;
+}): { tone: "ok" | "wait" | "bad"; label: string; title: string } {
+  const { apiUp, ready, loadingModel, dreaming, hasFrame, conn, stats } = opts;
+  const phase = stats.bootstrap_phase || "";
+  const label = (stats.bootstrap || "").trim();
+  const detail = (stats.bootstrap_detail || "").trim();
+  const elapsed =
+    typeof stats.bootstrap_elapsed_s === "number" && stats.bootstrap_elapsed_s > 0.4
+      ? ` ${stats.bootstrap_elapsed_s.toFixed(0)}s in this step.`
+      : "";
+  const titled = (short: string, extra = "") => ({
+    short,
+    title: `${extra || detail || short}${elapsed}`.trim(),
+  });
+
+  if (!apiUp) {
+    return {
+      tone: "bad",
+      label: "API unreachable",
+      title: "The browser cannot reach the GPU server. Nginx may be up while the backend is restarting.",
+    };
+  }
+  if (phase === "load_failed" || (stats.error && loadingModel === false && !ready && !dreaming)) {
+    const err = String(stats.error || detail || "weight load failed");
+    return { tone: "bad", label: label || "weight load failed", title: err };
+  }
+  if (label && phase && phase !== "waiting") {
+    const tone: "ok" | "wait" | "bad" =
+      phase === "live" || phase === "weights_ready" ? "ok" : phase === "load_failed" ? "bad" : "wait";
+    const mapped = titled(label);
+    return { tone, label: mapped.short, title: mapped.title };
+  }
+  if (dreaming && conn === "connecting") {
+    return { tone: "wait", label: "opening live stream", title: "HTTP start finished. Connecting the WebSocket for JPEGs." };
+  }
+  if (dreaming && !hasFrame) {
+    return { tone: "wait", label: "waiting for first frame", title: "Session is running. Waiting for the first JPEG on the socket." };
+  }
+  if (dreaming && hasFrame) {
+    return { tone: "ok", label: "streaming", title: "Live frames are arriving." };
+  }
+  if (ready) {
+    return { tone: "ok", label: "weights ready", title: "Checkpoint is on the GPU. Pick a seed and press Start Dreaming." };
+  }
+  if (loadingModel) {
+    return { tone: "wait", label: "loading weights", title: "Downloading or mapping the world-model checkpoint onto the GPU." };
+  }
+  return {
+    tone: "wait",
+    label: "waiting for GPU worker",
+    title: "Backend answered, but the GPU thread has not started a load yet.",
+  };
 }
 
 export default function App() {
@@ -57,6 +122,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [loadingModel, setLoadingModel] = useState(true);
+  const [apiUp, setApiUp] = useState(true);
   const [deliveredFps, setDeliveredFps] = useState(0);
   const [hasFrame, setHasFrame] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
@@ -141,17 +207,21 @@ export default function App() {
     const poll = async () => {
       try {
         const r = await fetch("/ready");
-        const body = await r.json();
+        const body = (await r.json()) as Stats & { error?: string | null };
         if (stop) return;
+        setApiUp(true);
         setReady(!!body.ready);
         setLoadingModel(!!body.loading);
         setStats((s) => ({ ...s, ...body }));
       } catch {
-        if (!stop) setReady(false);
+        if (!stop) {
+          setApiUp(false);
+          setReady(false);
+        }
       }
     };
     poll();
-    const id = setInterval(poll, 1000);
+    const id = setInterval(poll, 400);
     return () => {
       stop = true;
       clearInterval(id);
@@ -306,6 +376,13 @@ export default function App() {
     setError(null);
     pacerRef.current?.reset();
     setDreaming(true);
+    setStats((s) => ({
+      ...s,
+      bootstrap_phase: "encode_seed",
+      bootstrap: "starting dream",
+      bootstrap_detail: "Sending the seed still to the GPU worker.",
+      bootstrap_elapsed_s: 0,
+    }));
     await fetch("/api/preferences", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -463,11 +540,17 @@ export default function App() {
       setError(data.error || `Could not delete (${res.status})`);
       return;
     }
-    setGallery((g) => g.filter((s) => s.id !== id));
-    if (seedId === id) {
-      setSeedId("");
-      if (preview && !preview.startsWith("blob:")) setPreview(null);
-    }
+    setGallery((g) => {
+      const next = g.filter((s) => s.id !== id);
+      if (seedId === id) {
+        const pick = next[0];
+        setSeedId(pick ? pick.id : "");
+        if (!(preview && preview.startsWith("blob:"))) {
+          setPreview(pick ? pick.url : null);
+        }
+      }
+      return next;
+    });
   }
 
   function onViewportClick(ev: MouseEvent<HTMLDivElement>) {
@@ -521,6 +604,10 @@ export default function App() {
       wander: DEFAULT_PREFS.wander,
       motion_smoothing: DEFAULT_PREFS.motion_smoothing,
       dream_sharpness: DEFAULT_PREFS.dream_sharpness,
+      drift_delay: DEFAULT_PREFS.drift_delay,
+      drift_interval: DEFAULT_PREFS.drift_interval,
+      drift_strength: DEFAULT_PREFS.drift_strength,
+      drift_steps: DEFAULT_PREFS.drift_steps,
       steer_move: DEFAULT_PREFS.steer_move,
     };
     livePrefs(next);
@@ -614,6 +701,16 @@ export default function App() {
     };
   }, [dreaming]);
 
+  const engine = engineStatus({
+    apiUp,
+    ready,
+    loadingModel,
+    dreaming,
+    hasFrame,
+    conn,
+    stats,
+  });
+
   return (
     <div className={`shell ${railCollapsed && !railPinned ? "rail-collapsed" : ""} ${railPinned ? "rail-pinned" : ""}`}>
       <header className="top">
@@ -644,6 +741,7 @@ export default function App() {
                 : [
                     { id: "Overworld/Waypoint-1.5-1B-360P", label: "Waypoint 1B · 360p" },
                     { id: "Overworld/Waypoint-1.5-1B", label: "Waypoint 1B · 720p" },
+                    { id: "Overworld/Waypoint-1.1-Small", label: "Waypoint 1.1 Small · 360p · text" },
                   ]
               ).map((m) => (
                 <option key={m.id} value={m.id}>
@@ -694,7 +792,7 @@ export default function App() {
                 : stats.inpaint_status === "loading"
                   ? "Loading FLUX.2 Klein for inpaint"
                   : prefs.inpaint
-                    ? "Dream drift on. After a few seconds standing still, Klein continues the dream into an adjacent place instead of sharpening one patch. Texture lock and look-out still rescue the view even if this is off. Send Intention always inpaints."
+                    ? "Dream drift on. After the delay knob, Klein continues the dream. Interval 0 is once per standstill; raise it to keep drifting. Strength and steps are in Experience knobs. Texture lock and look-out still rescue the view if this is off. Send Intention always inpaints."
                     : "Dream drift off. Idle standing still will not rewrite the view. Texture-lock rescue and Send Intention still run."
             }
             aria-pressed={prefs.inpaint}
@@ -717,8 +815,15 @@ export default function App() {
                           : "on"}
             </strong>
           </button>
-          <div className={`pill ${ready ? "ok" : loadingModel ? "wait" : "bad"}`}>
-            {ready ? "model ready" : loadingModel ? "loading weights" : "server only"}
+          <div
+            className={`pill metric bootstrap ${engine.tone}`}
+            title={engine.title}
+            aria-live="polite"
+            role="status"
+            aria-label={engine.label}
+          >
+            <span className="metric-k">engine</span>
+            <strong>{engine.label}</strong>
           </div>
         </div>
       </header>
@@ -788,7 +893,7 @@ export default function App() {
                     onChange={(e) => livePrefs({ ...prefs, world_prompt: e.target.value })}
                     onFocus={() => (typingRef.current = true)}
                     onBlur={() => (typingRef.current = false)}
-                    placeholder="Peaceful exploration. Empty hands. No weapons."
+                    placeholder="Peaceful exploration. A path ahead, open sky."
                   />
                 </label>
                 {dreaming && (
@@ -861,11 +966,15 @@ export default function App() {
                           <img src={s.url} alt={s.label} />
                           <span>{s.label}</span>
                         </button>
-                        {(s.deletable || s.source === "klein") && (
+                        {s.deletable !== false && (
                           <button
                             type="button"
                             className="seed-trash"
-                            title="Delete this cached seed"
+                            title={
+                              s.source === "cc0"
+                                ? "Remove this CC0 still from the gallery (stays off until you restore the file)"
+                                : "Delete this cached Klein seed"
+                            }
                             aria-label={`Delete ${s.label}`}
                             onClick={(e) => void deleteSeed(s.id, e)}
                           >
@@ -987,6 +1096,16 @@ export default function App() {
                   <dd>{stats.vram?.allocated_mb?.toFixed(0) ?? "—"} MiB</dd>
                 </div>
                 <div>
+                  <dt>engine</dt>
+                  <dd>
+                    {stats.bootstrap || engine.label}
+                    {stats.bootstrap_phase ? ` · ${stats.bootstrap_phase}` : ""}
+                    {typeof stats.bootstrap_elapsed_s === "number"
+                      ? ` · ${stats.bootstrap_elapsed_s.toFixed(0)}s`
+                      : ""}
+                  </dd>
+                </div>
+                <div>
                   <dt>stream</dt>
                   <dd>
                     {prefs.resolution}p jpeg {prefs.jpeg_quality}
@@ -1033,7 +1152,20 @@ export default function App() {
             onContextMenu={(e) => e.preventDefault()}
           >
             <img ref={imgRef} alt="Dream viewport" className={hasFrame ? undefined : "is-empty"} />
-            {!hasFrame && (
+            {!hasFrame && dreaming && (
+              <div className="get-started">
+                <div className="get-started-inner">
+                  <p className="eyebrow">Starting dream</p>
+                  <h2>{engine.label}</h2>
+                  <p>{engine.title}</p>
+                  <p className="fine">
+                    First-run compile of this checkpoint can take several minutes. The top-bar engine pill
+                    updates as each step starts.
+                  </p>
+                </div>
+              </div>
+            )}
+            {!hasFrame && !dreaming && (
               <div className="get-started">
                 <div className="get-started-inner">
                   <p className="eyebrow">Get started</p>
@@ -1041,8 +1173,10 @@ export default function App() {
                   <p>
                     A locally generated lucid-dream sketch. You choose a first-person still; a world model on this
                     machine continues that view as you look and walk. It is not a diagnosis and not a map of you.
-                    On the loaded Waypoint 1B checkpoint, typed text does not drive the DiT — movement and the
-                    current pixels do. Klein inpaint is how an intention edits the view you are in.
+                    On the loaded checkpoint, typed text
+                    {stats.prompt_conditioning
+                      ? " is sent into the DiT with set_prompt (Waypoint 1.1 Small). Klein still paints hard cuts. "
+                      : " does not drive the 1B DiT — pick Waypoint 1.1 Small · text for live set_prompt. Movement and the current pixels still drive 1B. Klein inpaint is how an intention edits the view you are in. "}
                     Walking into a wall and looking out used to tile that wall; the session now
                     remembers an open view and cuts back to it (or asks Klein to open the sky).
                   </p>
@@ -1050,17 +1184,19 @@ export default function App() {
                   <h3>Start a dream</h3>
                   <ol>
                     <li>
-                      Wait until the top bar says <strong>model ready</strong>.
+                      Wait until the top bar <strong>engine</strong> pill says <strong>weights ready</strong>.
                     </li>
                     <li>
                       In <strong>Session</strong>, pick a CC0 still, upload a photograph, paint from the
                       standing prompt, or type a one-liner and <strong>Create seed</strong>.
                     </li>
                     <li>
-                      Optional: edit the standing world prompt. Defaults are unarmed exploration.
+                      Optional: edit the standing world prompt. Defaults are peaceful exploration.
                     </li>
                     <li>
-                      Click <strong>Start Dreaming</strong>. Live frames replace this card. <strong>Stop</strong>{" "}
+                      Click <strong>Start Dreaming</strong>. The engine pill walks through encoding the still,
+                      first-run compile, standing prompt, and first frame, then <strong>streaming</strong>.
+                      Live frames replace this card. <strong>Stop</strong>{" "}
                       ends the session; while it winds down the button reads <strong>Stopping</strong>, then{" "}
                       <strong>Stopped</strong>.
                     </li>
@@ -1069,9 +1205,17 @@ export default function App() {
                   <h3>Top bar</h3>
                   <dl className="ctl">
                     <dt>session</dt>
-                    <dd>RUNNING while generating. NOT RUNNING when idle.</dd>
+                    <dd>RUNNING while a dream is starting or generating. NOT RUNNING when idle.</dd>
+                    <dt>engine</dt>
+                    <dd>
+                      Bootstrap of this machine: API reachable, each weight-load step, then after Start
+                      Dreaming the seed / compile / prompt / first-frame steps, ending at streaming.
+                    </dd>
                     <dt>model</dt>
-                    <dd>Waypoint 1B at 360p or 720p. Switching reloads weights.</dd>
+                    <dd>
+                      Waypoint 1B at 360p or 720p (no live text), or Waypoint 1.1 Small for set_prompt.
+                      Switching reloads weights.
+                    </dd>
                     <dt>gpu</dt>
                     <dd>SM utilization from this machine.</dd>
                     <dt>gen fps</dt>
@@ -1081,8 +1225,9 @@ export default function App() {
                     </dd>
                     <dt>Dream drift</dt>
                     <dd>
-                      When on, standing still lets Klein continue the dream into an adjacent
-                      place. Texture-lock rescue still runs if you walk into a wall.
+                      When on, standing still lets Klein continue the dream. Delay, interval, strength,
+                      and steps are under Experience knobs. Texture-lock rescue still runs if you walk
+                      into a wall.
                     </dd>
                   </dl>
 
@@ -1107,12 +1252,14 @@ export default function App() {
                     </dd>
                     <dt>Knobs</dt>
                     <dd>
-                      Stream resolution, temperature, look sensitivity, JPEG quality, idle wander, motion
-                      smoothing, dream sharpness. Save writes preferences; Reset to Defaults restores the knob
-                      fields.
+                      Stream resolution, temperature, look, JPEG, idle wander, motion smoothing, dream
+                      sharpness, and dream-drift delay / interval / strength / steps. Save writes
+                      preferences; Reset to Defaults restores the knob fields.
                     </dd>
                     <dt>Diagnostics</dt>
-                    <dd>Generation fps, VRAM, composed prompt, and whether set_prompt is wired (it is not on 1B).</dd>
+                    <dd>
+                      Generation fps, VRAM, composed prompt, and whether set_prompt is wired (1.1 Small yes; 1B no).
+                    </dd>
                   </dl>
                 </div>
               </div>

@@ -23,12 +23,28 @@ MODELS: list[dict[str, Any]] = [
         "label": "Waypoint 1B · 360p",
         "width": 640,
         "height": 360,
+        "temporal": 4,
+        "prompt_conditioning": False,
+        "ae": "Overworld-Models/taehv1_5",
     },
     {
         "id": "Overworld/Waypoint-1.5-1B",
         "label": "Waypoint 1B · 720p",
         "width": 1280,
         "height": 720,
+        "temporal": 4,
+        "prompt_conditioning": False,
+        "ae": "Overworld-Models/taehv1_5",
+    },
+    {
+        "id": "Overworld/Waypoint-1.1-Small",
+        "label": "Waypoint 1.1 Small · 360p · text",
+        "width": 640,
+        "height": 360,
+        "temporal": 1,
+        "prompt_conditioning": True,
+        "ae": "OpenWorldLabs/owl_vae_f16_c16_distill_v0_nogan",
+        "prompt_encoder": "google/umt5-xl",
     },
 ]
 MODEL_IDS = {m["id"] for m in MODELS}
@@ -42,12 +58,25 @@ def resolve_model(model_id: str | None) -> str:
     return MODELS[0]["id"]
 
 
-def frame_size_for(model_id: str | None) -> tuple[int, int]:
+def model_entry(model_id: str | None) -> dict[str, Any]:
     mid = resolve_model(model_id)
     for m in MODELS:
         if m["id"] == mid:
-            return int(m["width"]), int(m["height"])
-    return (640, 360)
+            return m
+    return MODELS[0]
+
+
+def frame_size_for(model_id: str | None) -> tuple[int, int]:
+    m = model_entry(model_id)
+    return int(m["width"]), int(m["height"])
+
+
+def temporal_for(model_id: str | None) -> int:
+    return int(model_entry(model_id).get("temporal") or 4)
+
+
+def prompt_capable(model_id: str | None) -> bool:
+    return bool(model_entry(model_id).get("prompt_conditioning"))
 
 
 FRAME_SIZE = frame_size_for(MODEL_ID)

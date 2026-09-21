@@ -1,6 +1,6 @@
 # Psychomantium
 
-Local, interactive lucid-dream sketch. Pick a first-person start frame (or upload a photograph). A Waypoint world model generates successive frames; you steer with WASD / mouse. Typed intentions are **not** live text-to-world on this checkpoint. Same core loop as Overworld’s [Biome](https://github.com/Overworldai/Biome) client: **seed pixels + `CtrlInput`**, not DiT prompts.
+Local, interactive lucid-dream sketch. Pick a first-person start frame (or upload a photograph). A Waypoint world model generates successive frames; you steer with WASD / mouse. On **Waypoint 1.5 1B**, typed text is not live DiT conditioning. On **Waypoint 1.1 Small**, the standing prompt is sent with `set_prompt` (UMT5 cross-attention). Same core loop as Overworld’s [Biome](https://github.com/Overworldai/Biome) client: **seed pixels + `CtrlInput`**, plus optional text on 1.1 Small.
 
 This is exploration, not a psychological instrument. Generated images are not evidence about the player.
 
@@ -15,17 +15,17 @@ This is exploration, not a psychological instrument. Generated images are not ev
 
 Pinned engine: [`Overworldai/world_engine`](https://github.com/Overworldai/world_engine) commit `b3f1e725b222679a517632918cc78bba0c9fa433` (GPL-3).
 
-Default weights: [`Overworld/Waypoint-1.5-1B-360P`](https://huggingface.co/Overworld/Waypoint-1.5-1B-360P) (Apache-2.0), plus autoencoder `Overworld-Models/taehv1_5`.
+Default weights: [`Overworld/Waypoint-1.5-1B-360P`](https://huggingface.co/Overworld/Waypoint-1.5-1B-360P) (Apache-2.0), plus autoencoder `Overworld-Models/taehv1_5`. Text steering uses [`Overworld/Waypoint-1.1-Small`](https://huggingface.co/Overworld/Waypoint-1.1-Small) (~2.3B) with `OpenWorldLabs/owl_vae_f16_c16_distill_v0_nogan` and `google/umt5-xl`.
 
-From the published `config.yaml`:
+From the published configs:
 
-| Capability | 1B / 1B-360P |
-|---|---|
-| Keyboard / mouse `CtrlInput` | yes (`n_buttons: 256`) |
-| `gen_frame()` → 4 RGB frames | yes (temporal compression 4) |
-| `append_frame()` re-seed | yes |
-| `reset()` new session | yes |
-| Live `set_prompt()` | **no** (`prompt_conditioning: null`) |
+| Capability | 1B / 1B-360P | 1.1 Small |
+|---|---|---|
+| Keyboard / mouse `CtrlInput` | yes | yes |
+| `gen_frame()` RGB | 4 frames (TAEHV) | 1 frame (OWL VAE) |
+| `append_frame()` re-seed | yes | yes |
+| `reset()` new session | yes | yes |
+| Live `set_prompt()` | **no** (`prompt_conditioning: null`) | **yes** (`cross_attention`) |
 
 Intentions therefore use controller mapping and an **experimental** color-grade → `reset()` → `append_frame()` path. See `docs/LIMITATIONS.md`.
 
@@ -64,7 +64,7 @@ Weights are **not** stored in the image. Host directories are bind-mounted; `doc
 
 | Host path | Container path | What lives there |
 |---|---|---|
-| `data/hf-cache/` | `/data/hf-cache` | Hugging Face hub (`HF_HOME` / `HF_HUB_CACHE`): Waypoint 1B 360p+720p, TAEHV, Gemma 4 E4B GGUF, FLUX.2-klein-4B |
+| `data/hf-cache/` | `/data/hf-cache` | Hugging Face hub (`HF_HOME` / `HF_HUB_CACHE`): Waypoint 1B 360p+720p, TAEHV, Waypoint 1.1 Small, OWL VAE, UMT5-XL, Gemma 4 E4B GGUF, FLUX.2-klein-4B |
 | `data/torch-cache/` | `/data/torch-cache` | `torch.compile` inductor/triton + Torch Hub |
 | `data/xdg-cache/` | `/data/xdg-cache` and `/root/.cache` | Catch-all if a library ignores `HF_HOME` |
 | `data/outputs/` | `/data/outputs` | Snapshots / probe movies |
@@ -87,9 +87,9 @@ docker compose --profile probe run --rm probe
 
 Writes `data/outputs/probe/probe_report.json` and `probe_sample.mp4`.
 
-### 720p checkpoint
+### Checkpoints
 
-Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B` (1280×720) are in the local HF cache. Pick one from the **model** dropdown in the top bar. Switching unloads the current engine and loads the other on the GPU (the dream session stops). Stream resolution is set to that checkpoint’s native height.
+`Overworld/Waypoint-1.5-1B-360P` (640×360), `Overworld/Waypoint-1.5-1B` (1280×720), and `Overworld/Waypoint-1.1-Small` (640×360, live `set_prompt`) are in the model dropdown. Switching unloads the current engine and loads the other on the GPU (the dream session stops). Stream resolution is set to that checkpoint’s native height. 1.1 Small also pulls `google/umt5-xl` the first time.
 
 ## Controls
 
@@ -118,7 +118,7 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 | Motion smoothing | Exponential blend on look |
 | Dream sharpness | Remaps the 4-step noise schedule (same step count; compiled graph stays valid) |
 
-**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. **Send Intention** always runs FLUX.2 Klein on the current still. **Dream drift** is idle-only: stand still and Klein continues into an adjacent place (not a detail-sharpen of one patch). Walking into a repeating surface pauses forward motion and reseeds the last open view, or Klein-opens the sky. **Paint seed from prompt** paints a start frame before you enter.
+**Standing world prompt** is persisted with preferences. On 1B `set_prompt` is not wired into the DiT. On **1.1 Small** the composed standing prompt is sent with `set_prompt` at session start and whenever it changes. **Send Intention** still Klein-inpaints the current still. **Dream drift** is idle-only: stand still and Klein continues into an adjacent place (not a detail-sharpen of one patch). Walking into a repeating surface pauses forward motion and reseeds the last open view, or Klein-opens the sky. **Paint seed from prompt** paints a start frame before you enter.
 
 The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch interval (EMA), instead of flashing all four at once. Generation is uncapped by default; click the FPS badge to lock 30.
 

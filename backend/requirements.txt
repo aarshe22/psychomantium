@@ -9,6 +9,8 @@ imageio==2.37.2
 imageio-ffmpeg==0.6.0
 psutil==7.1.0
 pydantic==2.12.4
+protobuf>=5.0
+sentencepiece>=0.2.0
 bitsandbytes==0.49.2
 gguf>=0.10.0
 # llama-cpp-python CUDA wheel is installed in docker/backend.Dockerfile (cannot compile without nvcc).

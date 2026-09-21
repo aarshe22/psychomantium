@@ -1,11 +1,12 @@
 """Deterministic intention parser.
 
-Waypoint-1.5-1B has prompt_conditioning: null, so set_prompt() is not a
-supported live-text path. Intentions are mapped to:
+On Waypoint-1.5-1B, prompt_conditioning is null so set_prompt() cannot run.
+On Waypoint-1.1-Small, standing text is also sent through WorldEngine.set_prompt
+(cross-attention). All checkpoints still map intentions to:
 
 - controller holds / impulses (supported)
 - experimental KV-reset + append_frame after a color-grade of the last
-  generated frames (supported engine APIs, not text-to-world)
+  generated frames (supported engine APIs)
 
 Never claim visual verification without a measured frame statistic.
 """

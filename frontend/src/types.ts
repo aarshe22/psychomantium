@@ -40,10 +40,14 @@ export type Stats = {
     open_memories?: number;
     walk_held?: boolean;
   };
-  models?: { id: string; label: string; width?: number; height?: number; selected?: boolean }[];
+  models?: { id: string; label: string; width?: number; height?: number; selected?: boolean; prompt_conditioning?: boolean; temporal?: number }[];
   ready?: boolean;
   loading?: boolean;
   clients?: number;
+  bootstrap_phase?: string;
+  bootstrap?: string;
+  bootstrap_detail?: string;
+  bootstrap_elapsed_s?: number;
 };
 
 export const KEY = { W: 87, A: 65, S: 83, D: 68, SPACE: 32 };

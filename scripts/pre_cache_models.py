@@ -21,6 +21,9 @@ WAYPOINT_REPOS = (
     "Overworld/Waypoint-1.5-1B-360P",
     "Overworld/Waypoint-1.5-1B",
     "Overworld-Models/taehv1_5",
+    "Overworld/Waypoint-1.1-Small",
+    "OpenWorldLabs/owl_vae_f16_c16_distill_v0_nogan",
+    "google/umt5-xl",
 )
 
 AUTHORING_FILES = (

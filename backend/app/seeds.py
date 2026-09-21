@@ -1,8 +1,7 @@
 """Photoreal start frames for Waypoint.
 
-The 1B DiT continues from pixels. Gallery stills are CC0 eye-level paths and
-roads (no first-person hands or weapons), plus optional Klein-painted seeds.
-User upload stays first-class.
+The DiT continues from pixels. Gallery stills are CC0 eye-level paths and
+roads, plus optional Klein-painted seeds. User upload stays first-class.
 """
 
 from __future__ import annotations
@@ -22,9 +21,10 @@ from . import config
 SEEDS_DIR = config.SEEDS_DIR
 CC0_DIR = SEEDS_DIR / "cc0"
 PAINTED_DIR = SEEDS_DIR / "painted"
+HIDDEN_PATH = CC0_DIR / "hidden.json"
 USER_AGENT = "Psychomantium/0.1 (https://github.com/aarshe22/psychomantium)"
 
-# CC0 only. Eye-level empty paths/roads. No first-person hands or weapons.
+# CC0 only. Eye-level empty paths/roads.
 STARTERS: list[dict[str, str]] = [
     {
         "id": "rural-lane",
@@ -118,6 +118,30 @@ STARTERS: list[dict[str, str]] = [
 ]
 
 
+STARTER_IDS = {item["id"] for item in STARTERS}
+PAINTED_ID = re.compile(r"^painted-[0-9]+$")
+
+
+def _hidden_cc0() -> set[str]:
+    if not HIDDEN_PATH.is_file():
+        return set()
+    try:
+        raw = json.loads(HIDDEN_PATH.read_text())
+    except Exception:
+        return set()
+    if isinstance(raw, dict):
+        ids = raw.get("ids") or raw.get("hidden") or []
+    else:
+        ids = raw
+    return {str(x) for x in ids if str(x) in STARTER_IDS}
+
+
+def _save_hidden_cc0(ids: set[str]) -> None:
+    CC0_DIR.mkdir(parents=True, exist_ok=True)
+    keep = sorted(i for i in ids if i in STARTER_IDS)
+    HIDDEN_PATH.write_text(json.dumps({"ids": keep}, indent=2) + "\n")
+
+
 def _crop_16x9(img: Image.Image) -> Image.Image:
     w, h = img.size
     target = 16 / 9
@@ -137,8 +161,13 @@ def _crop_16x9(img: Image.Image) -> Image.Image:
 
 def _cache_starters() -> None:
     CC0_DIR.mkdir(parents=True, exist_ok=True)
+    hidden = _hidden_cc0()
     for item in STARTERS:
         dest = CC0_DIR / f"{item['id']}.jpg"
+        if item["id"] in hidden:
+            if dest.is_file():
+                dest.unlink()
+            continue
         if dest.is_file() and dest.stat().st_size > 20_000:
             continue
         req = urllib.request.Request(item["url"], headers={"User-Agent": USER_AGENT})
@@ -149,7 +178,7 @@ def _cache_starters() -> None:
         buf = io.BytesIO()
         out.save(buf, format="JPEG", quality=90)
         dest.write_bytes(buf.getvalue())
-    keep = {item["id"] for item in STARTERS}
+    keep = {item["id"] for item in STARTERS} - hidden
     for stale in CC0_DIR.glob("*.jpg"):
         if stale.stem not in keep:
             stale.unlink()
@@ -166,9 +195,6 @@ def ensure_gallery() -> Path:
     except Exception:
         pass
     return SEEDS_DIR
-
-
-PAINTED_ID = re.compile(r"^painted-[0-9]+$")
 
 
 def save_painted(jpeg: bytes, label: str = "Klein painted", prompt: str = "") -> dict[str, Any]:
@@ -193,18 +219,30 @@ def save_painted(jpeg: bytes, label: str = "Klein painted", prompt: str = "") ->
 
 
 def delete_painted(seed_id: str) -> bool:
+    return delete_seed(seed_id)
+
+
+def delete_seed(seed_id: str) -> bool:
     sid = (seed_id or "").strip()
-    if not PAINTED_ID.match(sid):
-        return False
-    path = PAINTED_DIR / f"{sid}.jpg"
-    info = PAINTED_DIR / f"{sid}.json"
-    if not path.is_file() and not info.is_file():
-        return False
-    if path.is_file():
-        path.unlink()
-    if info.is_file():
-        info.unlink()
-    return True
+    if PAINTED_ID.match(sid):
+        path = PAINTED_DIR / f"{sid}.jpg"
+        info = PAINTED_DIR / f"{sid}.json"
+        if not path.is_file() and not info.is_file():
+            return False
+        if path.is_file():
+            path.unlink()
+        if info.is_file():
+            info.unlink()
+        return True
+    if sid in STARTER_IDS:
+        hidden = _hidden_cc0()
+        hidden.add(sid)
+        _save_hidden_cc0(hidden)
+        path = CC0_DIR / f"{sid}.jpg"
+        if path.is_file():
+            path.unlink()
+        return True
+    return False
 
 
 def _painted_meta(path: Path) -> dict[str, Any]:
@@ -251,7 +289,7 @@ def catalog() -> list[dict[str, Any]]:
                 "source": "cc0",
                 "license": item.get("license"),
                 "default": bool(item.get("default")) and not painted,
-                "deletable": False,
+                "deletable": True,
             }
         )
     return out

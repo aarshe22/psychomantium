@@ -1,7 +1,8 @@
 """Gemma VLM + FLUX.2 Klein 4B: paint a first-person JPEG, then Waypoint continues.
 
-Waypoint-1.5-1B has prompt_conditioning=null. Language changes the world by
-rewriting the seed image, not by DiT cross-attention.
+Waypoint-1.5-1B has prompt_conditioning=null; language changes that world by
+rewriting the seed image. Waypoint-1.1-Small also applies the standing prompt
+via WorldEngine.set_prompt (UMT5 cross-attention). Klein still paints hard cuts.
 """
 
 from __future__ import annotations
@@ -68,17 +69,17 @@ POLICY = (
     "If the request is only disallowed content, call reject_request."
 )
 
-EXPLORATION_GUARD = (
-    "Unarmed first-person exploration only. Empty hands. "
-    "No weapons, firearms, hammers, swords, tools, or any held object in the lower corners. "
-    "No HUD, no text overlay."
+# Never name hands, arms, weapons, or inventory in Klein text. Those words make
+# FLUX.2 paint FPS gloves and guns even when the sentence is a prohibition.
+CAMERA = (
+    "Photoreal eye-level landscape photograph, 16:9, looking forward along a path. "
+    "Environment only: ground, scenery, and sky. No foreground character, no HUD, no text overlay."
 )
 
 EDIT_SYSTEM = (
     "You write short image-edit instructions for FLUX.2 Klein. "
-    "The editor gets a first-person reference frame plus your instruction. "
-    "Describe what to change, not the whole scene. Add elements unless told to replace. "
-    "This is a peaceful exploration sim: empty unarmed hands; never place weapons or tools in frame. "
+    "The editor gets an eye-level reference frame plus your instruction. "
+    "Describe scenery changes only. Never mention a character, body, inventory, or HUD. "
     f"{POLICY} "
     "End with 'Keep everything else unchanged.' "
     "Think briefly, then call submit_edit_instruction."
@@ -86,10 +87,21 @@ EDIT_SYSTEM = (
 
 GENERATE_SYSTEM = (
     "You write a detailed text-to-image prompt for FLUX.2 Klein. "
-    "The image is a first-person starting frame for an explorable world. "
-    "Describe setting, lighting, and atmosphere. Empty unarmed hands. No weapons or held tools. "
+    "The image is an eye-level starting landscape for an explorable world. "
+    "Describe setting, lighting, and atmosphere only. Never mention a character, body, or inventory. "
     f"{POLICY} "
     "Call submit_edit_instruction with the full prompt."
+)
+
+_BODY_GEAR_RE = re.compile(
+    r"(?i)\b("
+    r"empty unarmed hands|unarmed hands|empty hands|"
+    r"first-?person hands|gloved hands|bare hands|"
+    r"hands?|fingers?|gloves?|"
+    r"weapons?|firearms?|guns?|rifles?|pistols?|revolvers?|"
+    r"swords?|knives?|blades?|hammers?|axes?|"
+    r"held objects?|held tools?|unarmed"
+    r")\b(?:\s*[,.;:])?"
 )
 
 
@@ -161,6 +173,26 @@ def _extract_instruction(message: dict[str, Any]) -> str:
         except Exception:
             pass
     raise ValueError("VLM did not return submit_edit_instruction")
+
+
+def scrub_body_gear(text: str) -> str:
+    """Drop hand/weapon wording so Klein cannot treat it as something to draw."""
+    cleaned = _BODY_GEAR_RE.sub(" ", text or "")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+    return cleaned.strip(" ,.;:")
+
+
+def klein_seed_prompt(user_request: str) -> str:
+    text = scrub_body_gear(user_request) or "an explorable outdoor place"
+    return f"{CAMERA} {text}."
+
+
+def finalize_klein_prompt(text: str) -> str:
+    body = scrub_body_gear(text or "") or "an explorable outdoor place"
+    if CAMERA not in body:
+        body = f"{CAMERA} {body}".strip()
+    return body
 
 
 class SceneAuthoring:
@@ -312,8 +344,8 @@ class SceneAuthoring:
                     {
                         "type": "text",
                         "text": (
-                            f'The player asked: "{user_request}"\n'
-                            "Look at the frame and submit a specific edit instruction."
+                            f'The player asked: "{scrub_body_gear(user_request)}"\n'
+                            "Look at the frame and submit a scenery-only edit instruction."
                         ),
                     },
                 ],
@@ -327,8 +359,8 @@ class SceneAuthoring:
             {
                 "role": "user",
                 "content": (
-                    f'The player wants this world: "{user_request}"\n'
-                    "Submit a detailed first-person scene prompt."
+                    f'The player wants this world: "{scrub_body_gear(user_request)}"\n'
+                    "Submit a detailed landscape prompt. Environment only."
                 ),
             },
         ]
@@ -345,10 +377,11 @@ class SceneAuthoring:
         height: int,
         width: int,
         on_progress: Callable[[float], None] | None = None,
+        steps: int | None = None,
     ) -> Image.Image:
         if self.pipeline is None:
             raise AuthoringNotReady("Klein pipeline not loaded")
-        steps = max(int(KLEIN_STEPS), 1)
+        steps = max(int(steps if steps is not None else KLEIN_STEPS), 1)
 
         def _cb(pipe, step, timestep, callback_kwargs):
             if on_progress is not None:
@@ -358,6 +391,7 @@ class SceneAuthoring:
                     pass
             return callback_kwargs
 
+        prompt = finalize_klein_prompt(prompt)
         kwargs: dict[str, Any] = {
             "image": image,
             "prompt": prompt,
@@ -382,13 +416,8 @@ class SceneAuthoring:
             raise AuthoringNotReady(self.error or "Klein pipeline not loaded")
         w, h = size_wh
         th, tw = self._align(h, w)
-        text = (user_request or "").strip() or "an explorable first-person world"
-        prompt = (
-            "Photoreal first-person screenshot, eye-level, 16:9, natural lighting, "
-            "detailed materials, coherent environment. "
-            f"{text}. "
-            f"{EXPLORATION_GUARD}"
-        )
+        text = (user_request or "").strip() or "an explorable outdoor place"
+        prompt = klein_seed_prompt(text)
         blank = Image.new("RGB", (tw, th), (255, 255, 255))
         result = self.run_klein(blank, prompt, th, tw)
         return result.resize((w, h), Image.Resampling.LANCZOS), prompt
@@ -398,7 +427,7 @@ class SceneAuthoring:
             raise AuthoringNotReady(self.error or "authoring not ready")
         w, h = size_wh
         th, tw = self._align(h, w)
-        klein_prompt = self.prompt_for_generate(user_request)
+        klein_prompt = finalize_klein_prompt(self.prompt_for_generate(user_request))
         blank = Image.new("RGB", (tw, th), (255, 255, 255))
         result = self.run_klein(blank, klein_prompt, th, tw)
         return result.resize((w, h), Image.Resampling.LANCZOS), klein_prompt
@@ -408,16 +437,16 @@ class SceneAuthoring:
             raise AuthoringNotReady(self.error or "authoring not ready")
         w, h = size_wh
         pil = Image.fromarray(frame).convert("RGB")
-        klein_prompt = self.prompt_for_edit(pil, user_request)
+        klein_prompt = finalize_klein_prompt(self.prompt_for_edit(pil, user_request))
         th, tw = self._align(pil.height, pil.width)
         resized = pil.resize((tw, th), Image.Resampling.LANCZOS)
         result = self.run_klein(resized, klein_prompt, th, tw)
         return result.resize((w, h), Image.Resampling.LANCZOS), klein_prompt
 
     DETAIL_PROMPT = (
-        "Increase photorealistic detail, texture, materials, and lighting of this first-person view. "
+        "Increase photorealistic detail, texture, materials, and lighting of this eye-level view. "
         "Keep the same camera angle, composition, and layout. "
-        "Do not add people, hands, weapons, tools, or any held object. "
+        "Environment only. Do not add people or a foreground character. "
         "Do not change this place into a different location. "
         "Do not add subjects. Keep everything else unchanged."
     )
@@ -429,6 +458,7 @@ class SceneAuthoring:
         user_request: str | None = None,
         on_progress: Callable[[float], None] | None = None,
         fallback_prompt: str | None = None,
+        steps: int | None = None,
     ) -> tuple[Image.Image, str]:
         """Klein edit of the current view. No VLM.
 
@@ -441,17 +471,16 @@ class SceneAuthoring:
         pil = Image.fromarray(np.asarray(frame)).convert("RGB")
         th, tw = self._align(pil.height, pil.width)
         resized = pil.resize((tw, th), Image.Resampling.LANCZOS)
-        text = (user_request or "").strip()
+        text = scrub_body_gear(user_request or "")
         if text:
             prompt = (
-                "Photoreal first-person screenshot, eye-level, natural lighting, detailed materials. "
-                "Keep the same camera angle and overall layout of this view. "
-                f"Apply this change: {text}. "
-                f"{EXPLORATION_GUARD}"
+                "Photoreal eye-level landscape photograph, natural lighting, detailed materials. "
+                "Keep the same camera angle and overall layout of this view. Environment only. "
+                f"Apply this change: {text}. {CAMERA}"
             )
         else:
             prompt = (fallback_prompt or "").strip() or self.DETAIL_PROMPT
-        result = self.run_klein(resized, prompt, th, tw, on_progress=on_progress)
+        result = self.run_klein(resized, prompt, th, tw, on_progress=on_progress, steps=steps)
         return result.resize((w, h), Image.Resampling.LANCZOS), prompt
 
 

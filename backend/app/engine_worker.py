@@ -23,10 +23,10 @@ from PIL import Image
 from . import config
 from .dream_scene import (
     DREAM_BREATH_PROMPT,
-    DREAM_DRIFT_PROMPT,
     DREAM_LOOKOUT_PROMPT,
     LOCK_STREAK,
     analyze_frame,
+    drift_prompt,
     rgb_to_seed,
 )
 from .intentions import Intention, parse_intention
@@ -99,14 +99,41 @@ def pack_frame(seq: int, jpeg: bytes, width: int, height: int, gen_ms: float) ->
     return header + jpeg
 
 
-def image_to_seed(image_bytes: bytes, size_wh: tuple[int, int]) -> torch.Tensor:
+def image_to_seed(image_bytes: bytes, size_wh: tuple[int, int], n_frames: int = 4) -> torch.Tensor:
     img = Image.open(io.BytesIO(image_bytes))
     img = img.convert("RGB")
     w, h = size_wh
     img = img.resize((w, h), Image.Resampling.LANCZOS)
     arr = np.asarray(img, dtype=np.uint8)
-    stacked = np.repeat(arr[None, ...], 4, axis=0)
+    stacked = np.repeat(arr[None, ...], max(int(n_frames), 1), axis=0)
     return torch.from_numpy(stacked.copy())
+
+
+def as_frame_batch(decoded) -> np.ndarray:
+    """Normalize engine RGB to [T, H, W, C] uint8. OWL VAE returns one frame; TAEHV returns 4."""
+    if torch.is_tensor(decoded):
+        arr = decoded.detach().to("cpu").numpy()
+    else:
+        arr = np.asarray(decoded)
+    if arr.ndim == 3:
+        arr = arr[None, ...]
+    if arr.ndim != 4:
+        raise ValueError(f"expected HW3 or THW3 frames, got {arr.shape}")
+    return np.ascontiguousarray(arr)
+
+
+def seed_for_append(seed: torch.Tensor, n_frames: int) -> torch.Tensor:
+    """OWL encode wants [H,W,C]; TAEHV wants [T,H,W,C] with T=temporal_compression."""
+    n = max(int(n_frames), 1)
+    if seed.dim() == 3:
+        if n == 1:
+            return seed
+        return seed.unsqueeze(0).repeat(n, 1, 1, 1)
+    if n == 1:
+        return seed[0]
+    if seed.shape[0] == n:
+        return seed
+    return seed[:1].repeat(n, 1, 1, 1)
 
 
 def color_grade(frames: np.ndarray, mode: str) -> np.ndarray:
@@ -197,7 +224,33 @@ class EngineWorker:
         self._last_scene = None
         self._last_rescue_at = 0.0
         self._idle_since: Optional[float] = None
+        self._last_drift_at: Optional[float] = None
         self._grace_batches = 0
+        self.bootstrap_phase = "waiting"
+        self.bootstrap = "waiting for GPU worker"
+        self.bootstrap_detail = "The API is up. The GPU thread has not started loading weights yet."
+        self.bootstrap_at = time.monotonic()
+
+    def _set_bootstrap(self, phase: str, label: str, detail: str = "") -> None:
+        with self.lock:
+            self.bootstrap_phase = phase
+            self.bootstrap = label
+            self.bootstrap_detail = detail or label
+            self.bootstrap_at = time.monotonic()
+        try:
+            self._publish_status("bootstrap")
+        except Exception:
+            pass
+
+    def _bootstrap_public(self) -> dict[str, Any]:
+        with self.lock:
+            elapsed = time.monotonic() - float(self.bootstrap_at)
+            return {
+                "bootstrap_phase": self.bootstrap_phase,
+                "bootstrap": self.bootstrap,
+                "bootstrap_detail": self.bootstrap_detail,
+                "bootstrap_elapsed_s": round(elapsed, 1),
+            }
 
     def _gpu_call(self, op: str, *args, wait: bool = True):
         box: dict[str, Any] = {"err": None, "result": None}
@@ -244,6 +297,11 @@ class EngineWorker:
             self.loading = True
             self.load_error = None
             self.model_id = config.resolve_model(self.prefs.get("model_id") or self.model_id)
+        self._set_bootstrap(
+            "gpu_queue",
+            "queued on GPU thread",
+            "Waiting for exclusive GPU access so this checkpoint can load.",
+        )
         try:
             self._gpu_call("load")
         except Exception as exc:
@@ -251,6 +309,11 @@ class EngineWorker:
                 self.load_error = f"{type(exc).__name__}: {exc}"
                 self.loading = False
                 self.ready = False
+            self._set_bootstrap(
+                "load_failed",
+                "weight load failed",
+                f"{type(exc).__name__}: {exc}",
+            )
             raise
 
     def models_public(self) -> list[dict[str, Any]]:
@@ -258,6 +321,7 @@ class EngineWorker:
             {
                 **m,
                 "selected": m["id"] == self.model_id,
+                "prompt_conditioning": bool(m.get("prompt_conditioning")),
             }
             for m in config.MODELS
         ]
@@ -285,6 +349,11 @@ class EngineWorker:
             prefs["model_id"] = model_id
             prefs["resolution"] = config.frame_size_for(model_id)[1]
             self.prefs = save_prefs(prefs)
+        self._set_bootstrap(
+            "gpu_queue",
+            "queued on GPU thread",
+            f"Switching to {model_id}. Waiting for exclusive GPU access.",
+        )
         try:
             self._gpu_call("load")
             w, h = self.frame_size
@@ -295,6 +364,7 @@ class EngineWorker:
                 self.load_error = msg
                 self.loading = False
                 self.ready = False
+            self._set_bootstrap("load_failed", "weight load failed", msg)
             if "CUDA" in msg or "AcceleratorError" in type(exc).__name__:
                 self._request_cuda_restart(msg)
             return {"ok": False, "error": msg}
@@ -312,11 +382,74 @@ class EngineWorker:
 
     def _load_engine(self) -> None:
         t0 = time.perf_counter()
+        import world_engine.world_engine as we
         from world_engine import WorldEngine
 
         self._unload_engine()
-        engine = WorldEngine(self.model_id, quant=config.QUANT, device=config.DEVICE)
+        self._set_bootstrap(
+            "load_config",
+            "reading checkpoint config",
+            f"Opening {self.model_id} (config.yaml / model card).",
+        )
+        orig_ae = we.get_ae
+        orig_from = we.WorldModel.from_pretrained
+        orig_pe = we.PromptEncoder
+        orig_kv = we.StaticKVCache
+        worker = self
+
+        def _get_ae(*args, **kwargs):
+            worker._set_bootstrap(
+                "load_vae",
+                "loading VAE",
+                "Pixel decoder for this checkpoint. Host cache after the first download.",
+            )
+            return orig_ae(*args, **kwargs)
+
+        def _from_pretrained(*args, **kwargs):
+            worker._set_bootstrap(
+                "load_dit",
+                "loading DiT weights",
+                "World transformer. This is the long step if the files are not already on disk.",
+            )
+            return orig_from(*args, **kwargs)
+
+        class _PromptEncoder(orig_pe):
+            def __init__(self, *args, **kwargs):
+                worker._set_bootstrap(
+                    "load_text",
+                    "loading text encoder",
+                    "UMT5 (or the checkpoint’s prompt encoder) for set_prompt.",
+                )
+                super().__init__(*args, **kwargs)
+
+        class _KV(orig_kv):
+            def __init__(self, *args, **kwargs):
+                worker._set_bootstrap(
+                    "load_kv",
+                    "allocating KV cache",
+                    "Static attention cache used by the live generation loop.",
+                )
+                super().__init__(*args, **kwargs)
+
+        we.get_ae = _get_ae
+        we.WorldModel.from_pretrained = _from_pretrained
+        we.PromptEncoder = _PromptEncoder
+        we.StaticKVCache = _KV
+        try:
+            engine = WorldEngine(self.model_id, quant=config.QUANT, device=config.DEVICE)
+        finally:
+            we.get_ae = orig_ae
+            we.WorldModel.from_pretrained = orig_from
+            we.PromptEncoder = orig_pe
+            we.StaticKVCache = orig_kv
+        self._set_bootstrap(
+            "load_runtime",
+            "wiring sampler",
+            "Temperature hook, scheduler, and moving the prompt encoder onto the GPU.",
+        )
         self._install_temperature_hook(engine)
+        if getattr(engine, "prompt_encoder", None) is not None:
+            engine.prompt_encoder.to(engine.device)
         self._sigma_base = engine.scheduler_sigmas.detach().clone()
         self._apply_scheduler(engine)
         prompt_supported = False
@@ -331,10 +464,26 @@ class EngineWorker:
             self.ready = True
             self.load_seconds = time.perf_counter() - t0
             self.loading = False
+        self._set_bootstrap(
+            "weights_ready",
+            "weights ready",
+            "Checkpoint is on the GPU. Pick a seed and press Start Dreaming.",
+        )
 
     @property
     def frame_size(self) -> tuple[int, int]:
         return config.frame_size_for(self.model_id)
+
+    @property
+    def n_seed_frames(self) -> int:
+        if self.engine is not None:
+            try:
+                t = int(getattr(self.engine.model_cfg, "temporal_compression", 0) or 0)
+                if t > 0:
+                    return t
+            except Exception:
+                pass
+        return config.temporal_for(self.model_id)
 
     def _install_temperature_hook(self, engine) -> None:
         worker = self
@@ -397,7 +546,7 @@ class EngineWorker:
         return {"ok": True, "yaw": self.view_yaw, "pitch": self.view_pitch}
 
     def health(self) -> dict[str, Any]:
-        return {"status": "ok", "ready": self.ready, "loading": self.loading}
+        return {"status": "ok", "ready": self.ready, "loading": self.loading, **self._bootstrap_public()}
 
     def readiness(self) -> dict[str, Any]:
         mem = gpu_mem_mb()
@@ -423,6 +572,7 @@ class EngineWorker:
             "inpaint_status": self.inpaint_status,
             "inpaint_progress": self.inpaint_progress,
             "authoring": authoring.status(),
+            **self._bootstrap_public(),
         }
 
     def set_controls(
@@ -488,8 +638,9 @@ class EngineWorker:
                 if intent.kind == "world" and intent.active:
                     intent.status = "submitted"
                     intent.note = (
-                        "Active as a standing world rule. The loaded Waypoint-1.5-1B checkpoint "
-                        "has prompt_conditioning=null, so set_prompt is not wired into the DiT. "
+                        "Active as a standing world rule. This checkpoint has "
+                        "prompt_conditioning=null, so set_prompt is not wired into the DiT. "
+                        "Pick Waypoint 1.1 Small for live text, or keep using Klein inpaint. "
                         "The seed image and movement still drive the world."
                     )
             return self.last_prompt_result
@@ -500,16 +651,18 @@ class EngineWorker:
                 if intent.kind == "world" and intent.active:
                     intent.status = "submitted"
                     intent.engine_action = "standing world prompt (set_prompt)"
+                    extra = "DiT cross-attention received this session standing prompt."
+                    if extra.lower() not in (intent.note or "").lower():
+                        intent.note = f"{intent.note} {extra}".strip() if intent.note else extra
             return self.last_prompt_result
         except Exception as exc:
-            self.last_prompt_result = f"set_prompt_unavailable: {type(exc).__name__}"
+            self.last_prompt_result = f"set_prompt_unavailable: {type(exc).__name__}: {exc}"
             for intent in self.intentions:
                 if intent.kind == "world" and intent.active:
                     intent.status = "submitted"
                     intent.note = (
-                        "Active as a standing world rule. The loaded Waypoint-1.5-1B checkpoint "
-                        "has prompt_conditioning=null, so set_prompt is not wired into the DiT. "
-                        "The seed image and movement still drive the world."
+                        f"set_prompt failed ({type(exc).__name__}). Standing rule is kept for Klein; "
+                        "the seed image and movement still drive the world."
                     )
             return self.last_prompt_result
 
@@ -648,10 +801,16 @@ class EngineWorker:
     def start_session(self, image_bytes: bytes, prompt: str = "") -> dict[str, Any]:
         if not self.ready or self.engine is None:
             return {"ok": False, "error": self.load_error or "model not ready"}
+        self._set_bootstrap(
+            "encode_seed",
+            "encoding start still",
+            "Resizing the seed JPEG to the checkpoint’s native frame size.",
+        )
         try:
-            seed = image_to_seed(image_bytes, self.frame_size)
+            seed = image_to_seed(image_bytes, self.frame_size, n_frames=self.n_seed_frames)
             preview = encode_jpeg(seed[0].numpy(), 85)
         except Exception as exc:
+            self._set_bootstrap("weights_ready", "weights ready", "Seed image failed; checkpoint is still loaded.")
             return {"ok": False, "error": f"bad seed image: {exc}"}
         self.stop_session()
         with self.lock:
@@ -682,14 +841,21 @@ class EngineWorker:
             self._last_scene = None
             self._last_rescue_at = 0.0
             self._idle_since = None
+            self._last_drift_at = None
             self._grace_batches = 0
             self.inpaint_status = "armed" if bool(self.prefs.get("inpaint", False)) else "off"
+        self._set_bootstrap(
+            "gpu_queue",
+            "queued on GPU thread",
+            "Session is waiting for the GPU worker (it may still be finishing a previous job).",
+        )
         try:
             return self._gpu_call("start", seed)
         except Exception as exc:
             self.session_active = False
             msg = f"{type(exc).__name__}: {exc}"
             self.last_error = msg
+            self._set_bootstrap("weights_ready", "weights ready", f"Start failed: {msg}")
             if "CUDA" in msg or "AcceleratorError" in type(exc).__name__:
                 self._request_cuda_restart(msg)
             return {"ok": False, "error": msg}
@@ -697,6 +863,11 @@ class EngineWorker:
     def _start_on_gpu(self, seed: torch.Tensor) -> dict[str, Any]:
         engine = self.engine
         assert engine is not None
+        self._set_bootstrap(
+            "reset_engine",
+            "resetting world cache",
+            "Clearing KV cache and applying the dream-sharpness schedule.",
+        )
         engine.reset()
         if self._sched_dirty:
             try:
@@ -704,9 +875,19 @@ class EngineWorker:
                 self._sched_dirty = False
             except Exception:
                 pass
-        decoded = engine.append_frame(seed)
+        self._set_bootstrap(
+            "seed_compile",
+            "seeding world · first compile",
+            "append_frame into the DiT. The first call compiles CUDA graphs and can take minutes.",
+        )
+        decoded = engine.append_frame(seed_for_append(seed, self.n_seed_frames))
+        self._set_bootstrap(
+            "apply_prompt",
+            "applying standing prompt",
+            "set_prompt on text-capable checkpoints; a no-op on 1B.",
+        )
         self.try_set_prompt()
-        frames = decoded.detach().to("cpu").numpy()
+        frames = as_frame_batch(decoded)
         self.last_frames = frames
         self._note_open_frame(frames)
         self._publish_batch(frames, gen_ms=0.0, kind="seed")
@@ -714,14 +895,19 @@ class EngineWorker:
         from world_engine import CtrlInput
 
         try:
+            self._set_bootstrap(
+                "warm_frame",
+                "warming first generated frame",
+                "First gen_frame. Compiles the live denoising path if this checkpoint has not run yet.",
+            )
             warm = engine.gen_frame(ctrl=CtrlInput())
-            warm_np = warm.detach().to("cpu").numpy()
+            warm_np = as_frame_batch(warm)
             seed_m = analyze_frame(frames)
             warm_m = analyze_frame(warm_np)
             if warm_m.openness + 0.06 < seed_m.openness or (warm_m.locked and not seed_m.locked):
                 engine.reset()
-                decoded = engine.append_frame(seed)
-                frames = decoded.detach().to("cpu").numpy()
+                decoded = engine.append_frame(seed_for_append(seed, self.n_seed_frames))
+                frames = as_frame_batch(decoded)
                 self.last_frames = frames
             else:
                 self.last_frames = warm_np
@@ -730,7 +916,14 @@ class EngineWorker:
                 self._note_open_frame(warm_np)
         except Exception:
             pass
-        return {"ok": True, "prompt_applied": False, "reason": "prompt_conditioning is null on this checkpoint"}
+        applied = self.last_prompt_result == "set_prompt_ok"
+        reason = self.last_prompt_result or "prompt_conditioning is null on this checkpoint"
+        self._set_bootstrap(
+            "live",
+            "streaming",
+            "World is seeded. The live generation loop is starting.",
+        )
+        return {"ok": True, "prompt_applied": applied, "reason": reason}
 
     def request_seed_reset(self) -> dict[str, Any]:
         if not self.session_active or self.original_seed is None:
@@ -751,9 +944,9 @@ class EngineWorker:
         if engine is None:
             return
         engine.reset()
-        decoded = engine.append_frame(seed)
+        decoded = engine.append_frame(seed_for_append(seed, self.n_seed_frames))
         self.try_set_prompt()
-        frames = decoded.detach().to("cpu").numpy()
+        frames = as_frame_batch(decoded)
         self.last_frames = frames
         self.view_yaw = 0.0
         self.view_pitch = 0.0
@@ -766,8 +959,15 @@ class EngineWorker:
 
     def stop_session(self) -> None:
         with self.lock:
+            was_active = self.session_active
             self.session_active = False
         self.stop_event.set()
+        if was_active:
+            self._set_bootstrap(
+                "stopping",
+                "stopping session",
+                "Waiting for the GPU generation loop to unwind.",
+            )
         try:
             if self.last_frames is not None:
                 self._publish_batch(self.last_frames, gen_ms=0.0, kind="stop")
@@ -782,7 +982,14 @@ class EngineWorker:
             self._intent_inpaint_queue.clear()
             if not bool(self.prefs.get("inpaint", False)):
                 self.inpaint_status = "off"
-        self._publish_status("stop")
+        if self.ready and not self.loading:
+            self._set_bootstrap(
+                "weights_ready",
+                "weights ready",
+                "Session stopped. Checkpoint is still on the GPU.",
+            )
+        else:
+            self._publish_status("stop")
 
     def note_client(self, delta: int) -> None:
         with self.lock:
@@ -823,8 +1030,8 @@ class EngineWorker:
                 }
                 seed = torch.from_numpy(np.ascontiguousarray(graded))
                 self.engine.reset()
-                decoded = self.engine.append_frame(seed)
-                frames = decoded.detach().to("cpu").numpy()
+                decoded = self.engine.append_frame(seed_for_append(seed, self.n_seed_frames))
+                frames = as_frame_batch(decoded)
                 self.last_frames = frames
                 intent.status = "submitted"
                 intent.active = False
@@ -899,6 +1106,7 @@ class EngineWorker:
             "scene": self._scene_public(),
             "native_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
             "stream_size": {"width": w, "height": h},
+            **self._bootstrap_public(),
         }
         blob = b"".join(payloads)
         with self.frame_slot:
@@ -963,6 +1171,7 @@ class EngineWorker:
             meta["session_world_prompt"] = self.session_world_prompt()
             meta["prompt_apply"] = self.last_prompt_result
             meta["scene"] = self._scene_public()
+            meta.update(self._bootstrap_public())
             self.latest_meta = meta
             self.frame_slot.notify_all()
 
@@ -995,7 +1204,7 @@ class EngineWorker:
         self._last_scene = metrics
         if not metrics.open:
             return
-        stacked = rgb_to_seed(frames)
+        stacked = rgb_to_seed(frames, n_frames=self.n_seed_frames)
         self._open_seeds.append(torch.from_numpy(np.ascontiguousarray(stacked)))
 
     def _observe_scene(self, frames: np.ndarray) -> None:
@@ -1003,7 +1212,7 @@ class EngineWorker:
         self._last_scene = metrics
         if metrics.open:
             self._lock_streak = 0
-            stacked = rgb_to_seed(frames)
+            stacked = rgb_to_seed(frames, n_frames=self.n_seed_frames)
             self._open_seeds.append(torch.from_numpy(np.ascontiguousarray(stacked)))
             self._freeze_walk = False
             return
@@ -1082,6 +1291,8 @@ class EngineWorker:
         fallback_prompt: str | None = None,
         kind: str = "inpaint",
         replace_original: bool = False,
+        blend: float | None = None,
+        steps: int | None = None,
     ) -> None:
         engine = self.engine
         frames = self.last_frames
@@ -1090,23 +1301,32 @@ class EngineWorker:
         self.inpaint_status = "running"
         self.inpaint_progress = 0.08
         self._publish_inpaint_progress(0.08)
+        prev = np.asarray(frames[-1])
         pil, _prompt = authoring.refine_frame(
-            frames[-1],
+            prev,
             self.frame_size,
             user_request=modifier,
             on_progress=self._publish_inpaint_progress,
             fallback_prompt=fallback_prompt,
+            steps=steps,
         )
         arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
-        stacked = np.repeat(arr[None, ...], 4, axis=0)
+        if blend is not None:
+            s = float(max(0.0, min(1.0, blend)))
+            src = prev[..., :3].astype(np.float32)
+            if src.shape[:2] != arr.shape[:2]:
+                src = cv2.resize(src, (arr.shape[1], arr.shape[0]), interpolation=cv2.INTER_AREA)
+            arr = np.clip((1.0 - s) * src + s * arr.astype(np.float32), 0, 255).astype(np.uint8)
+        stacked = np.repeat(arr[None, ...], self.n_seed_frames, axis=0)
         seed = torch.from_numpy(np.ascontiguousarray(stacked))
         engine.reset()
-        decoded = engine.append_frame(seed)
-        out = decoded.detach().to("cpu").numpy()
+        decoded = engine.append_frame(seed_for_append(seed, self.n_seed_frames))
+        out = as_frame_batch(decoded)
         self.last_frames = out
         if replace_original:
             self.original_seed = seed.detach().clone()
         self._note_open_frame(out)
+        self.try_set_prompt()
         self._freeze_walk = False
         self._lock_streak = 0
         self.inpaint_status = "done"
@@ -1115,11 +1335,21 @@ class EngineWorker:
         self.inpaint_progress = 0.0
 
     def _idle_inpaint_on_gpu(self, modifier: str | None = None) -> None:
+        if modifier:
+            self._scene_inpaint_on_gpu(
+                modifier=modifier,
+                kind="inpaint",
+                replace_original=False,
+            )
+            return
+        strength = float(self.prefs.get("drift_strength", 0.55))
+        steps = int(self.prefs.get("drift_steps", 4))
         self._scene_inpaint_on_gpu(
-            modifier=modifier,
-            fallback_prompt=None if modifier else DREAM_DRIFT_PROMPT,
-            kind="inpaint" if modifier else "drift",
+            fallback_prompt=drift_prompt(strength),
+            kind="drift",
             replace_original=False,
+            blend=strength,
+            steps=steps,
         )
 
     def _maybe_directed_inpaint(self) -> bool:
@@ -1169,11 +1399,13 @@ class EngineWorker:
                 self.inpaint_status = "off"
             self._idle_batches = 0
             self._inpainted_this_idle = False
+            self._last_drift_at = None
             return False
         if self._user_steering():
             self._idle_batches = 0
             self._idle_since = None
             self._inpainted_this_idle = False
+            self._last_drift_at = None
             if self.inpaint_status in {"done", "running"}:
                 self.inpaint_status = "armed"
             elif self.inpaint_status == "off":
@@ -1183,9 +1415,16 @@ class EngineWorker:
         if self._idle_since is None:
             self._idle_since = now
         self._idle_batches += 1
-        if self._inpainted_this_idle:
+        delay = float(self.prefs.get("drift_delay", 5.0))
+        interval = float(self.prefs.get("drift_interval", 0.0))
+        if self._last_drift_at is None:
+            if (now - self._idle_since) < delay:
+                if self.inpaint_status in {"off", "done"}:
+                    self.inpaint_status = "armed"
+                return False
+        elif interval < 1.0:
             return False
-        if (now - self._idle_since) < 5.0:
+        elif (now - self._last_drift_at) < interval:
             if self.inpaint_status in {"off", "done"}:
                 self.inpaint_status = "armed"
             return False
@@ -1197,10 +1436,12 @@ class EngineWorker:
                 authoring.load()
             self._idle_inpaint_on_gpu()
             self._inpainted_this_idle = True
+            self._last_drift_at = time.monotonic()
             return True
         except Exception as exc:
             self.inpaint_status = "error"
             self._inpainted_this_idle = True
+            self._last_drift_at = time.monotonic()
             self.last_error = f"inpaint: {type(exc).__name__}: {exc}"
             return False
 
@@ -1209,6 +1450,12 @@ class EngineWorker:
 
         engine = self.engine
         assert engine is not None
+        if self.bootstrap_phase != "live":
+            self._set_bootstrap(
+                "live",
+                "streaming",
+                "Live DiT loop. Frames are going to the browser.",
+            )
         while not self.stop_event.is_set():
             deadline = self.disconnect_deadline
             if deadline is not None and time.time() > deadline:
@@ -1238,7 +1485,7 @@ class EngineWorker:
                     torch.cuda.synchronize()
                 t0 = time.perf_counter()
                 out = engine.gen_frame(ctrl=ctrl)
-                frames = out.detach().to("cpu").numpy()
+                frames = as_frame_batch(out)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 gen_ms = (time.perf_counter() - t0) * 1000.0

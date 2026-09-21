@@ -2,7 +2,7 @@
 
 Engine: world_engine `b3f1e725b222679a517632918cc78bba0c9fa433`.
 Checkpoint default: `Overworld/Waypoint-1.5-1B-360P`.
-Both 1B configs ship `prompt_conditioning: null`, so `WorldEngine.set_prompt` cannot run (it raises if the prompt encoder was never created).
+Both 1B configs ship `prompt_conditioning: null`, so `WorldEngine.set_prompt` cannot run on those weights (it raises if the prompt encoder was never created). **`Overworld/Waypoint-1.1-Small`** has `prompt_conditioning: cross_attention`, OWL VAE `OpenWorldLabs/owl_vae_f16_c16_distill_v0_nogan`, and `google/umt5-xl`. Pick it from the model dropdown for live standing-prompt steering. Prompt adherence is still weak (Overworld documents this).
 
 ## Movement (supported)
 
@@ -39,7 +39,7 @@ See README. Resolution above 360p is **stream upscale**, not a 720p model swap. 
 
 Statuses: `received` → `submitted` (engine API called) → `visually_verified` only if the statistic above fires. Unmatched Speak lines stay `submitted` as world rules and also Klein-inpaint the current still. `failed` is reserved for engine errors on the transform or Klein path.
 
-The Session **standing world prompt** is stored and shown. On this 1B checkpoint it is **not** DiT conditioning (`prompt_conditioning=null`). [Biome](https://github.com/Overworldai/Biome) uses the same honesty: its prompt notification resets the engine and ignores the text. Visual quality is the **start frame** (gallery or upload) plus movement. A warmup `gen_frame` runs after the seed so the first walk is not a compile hitch.
+The Session **standing world prompt** is stored and shown. On 1B it is **not** DiT conditioning (`prompt_conditioning=null`). On **Waypoint 1.1 Small** the same text is passed to `WorldEngine.set_prompt` into UMT5 cross-attention, and Klein still inpaints hard cuts. Visual quality is still the **start frame** plus movement. A warmup `gen_frame` runs after the seed so the first walk is not a compile hitch.
 
 ## Scene authoring
 
@@ -51,8 +51,9 @@ If the view collapses to one repeating surface, forward walk is held and the eng
 
 - No permanent geography, physics, or object persistence (by design of the model).
 - Backtracking invents new scenery.
-- Live language conditioning is **not** implemented by these weights. Typing a sentence does not steer the DiT’s cross-attention. Biome does not `set_prompt` on 1B either.
-- The seed image is the world prior. Gallery stills are CC0 eye-level paths and roads (Wikimedia Commons / StockSnap, cached on the host) or Klein-painted frames, plus user upload. Overworld FPS stills are not used: they show hands and weapons. Schematic drawings are out of distribution.
+- Live language conditioning is **not** implemented on Waypoint-1.5-1B. Typing a sentence does not steer that DiT. **Waypoint-1.1-Small** does call `set_prompt`; Overworld still warns the model may ignore the text.
+- The 1.1 Small OWL VAE emits **one** RGB frame per `gen_frame` (temporal compression 1), not TAEHV’s 4-frame batch.
+- The seed image is the world prior. Gallery stills are CC0 eye-level paths and roads (Wikimedia Commons / StockSnap, cached on the host) or Klein-painted seeds, plus user upload. Overworld FPS stills are not used. Schematic drawings are out of distribution.
 - Experimental transforms change the seed image, then the world model continues. That is not “the model understood night.”
 - The browser spreads each 4-frame batch across the last batch interval (EMA). That is display pacing, not extra inference.
 - `torch.compile` makes the first batches slow; a warmup `gen_frame` after seed absorbs some of that. Diagnostics report generation FPS from `gen_frame` wall time, separately from paced delivered FPS.

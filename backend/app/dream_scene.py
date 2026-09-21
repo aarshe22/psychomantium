@@ -12,33 +12,53 @@ import cv2
 import numpy as np
 
 DREAM_WORLD_PROMPT = (
-    "An imaginary first-person dream you can walk through. Eye-level, a path or "
-    "clearing ahead, open sky when looking out. Empty unarmed hands. No weapons, "
-    "tools, HUD, or text overlay."
+    "An imaginary eye-level dream you can walk through. A path or clearing ahead, "
+    "open sky when looking out. No HUD or text overlay."
 )
 
 DREAM_BREATH_PROMPT = (
-    "Pull the camera back to a stable eye-level first-person view of this same "
-    "kind of place. Restore distance: a path, clearing, or ground plane ahead and "
-    "open sky or weather above. Do not fill the frame with one repeating wall, "
-    "brick, dirt patch, or corrugated surface. Keep photoreal materials. "
-    "No people, hands, weapons, tools, HUD, or text."
+    "Pull the camera back to a stable eye-level view of this same kind of place. "
+    "Restore distance: a path, clearing, or ground plane ahead and open sky or weather above. "
+    "Do not fill the frame with one repeating wall, brick, dirt patch, or corrugated surface. "
+    "Keep photoreal materials. Environment only: no people, no foreground character, no HUD, no text."
 )
 
 DREAM_LOOKOUT_PROMPT = (
     "The viewer is looking out from too close to a surface. Open the view: "
     "horizon, sky, and a walkable place ahead in the same dream. Do not tile "
-    "the nearby texture across the sky or sides. Photoreal first-person, "
-    "eye-level. No people, hands, weapons, tools, HUD, or text."
+    "the nearby texture across the sky or sides. Photoreal eye-level landscape. "
+    "Environment only: no people, no foreground character, no HUD, no text."
 )
 
 DREAM_DRIFT_PROMPT = (
     "Continue this as an imaginary dream: a slight adjacent place the viewer "
-    "could walk into, same first-person eye-level. Keep a path or opening ahead "
+    "could walk into, same eye-level view. Keep a path or opening ahead "
     "and sky if the view looks out. Soft change of thought, not a hard cut. "
-    "Do not fill the frame with one repeating surface. Do not add people, "
-    "hands, weapons, tools, HUD, or text."
+    "Do not fill the frame with one repeating surface. Environment only: "
+    "no people, no foreground character, no HUD, no text."
 )
+
+_DRIFT_SOFT = (
+    "Same place, same camera. Only a slight change of light, weather, or foliage. "
+    "Keep the path, layout, and distances. Do not invent a new location. "
+    "Environment only: no people, no foreground character, no HUD, no text."
+)
+_DRIFT_FAR = (
+    "Continue this as an imaginary dream into a clearly adjacent place through "
+    "the same eye-level view. Keep a walkable opening ahead and sky if looking out. "
+    "Soft change of thought, not a hard cut. Do not fill the frame with one repeating "
+    "surface. Environment only: no people, no foreground character, no HUD, no text."
+)
+
+
+def drift_prompt(strength: float) -> str:
+    """Idle Klein instruction. Low = same place; high = adjacent dream."""
+    s = float(max(0.0, min(1.0, strength)))
+    if s < 0.34:
+        return _DRIFT_SOFT
+    if s < 0.67:
+        return DREAM_DRIFT_PROMPT
+    return _DRIFT_FAR
 
 LOCK_THRESHOLD = 0.62
 OPEN_THRESHOLD = 0.48
@@ -129,11 +149,11 @@ def analyze_frame(rgb: np.ndarray) -> SceneMetrics:
     )
 
 
-def rgb_to_seed(rgb: np.ndarray) -> np.ndarray:
+def rgb_to_seed(rgb: np.ndarray, n_frames: int = 4) -> np.ndarray:
     frame = np.asarray(rgb)
     if frame.ndim == 4:
         frame = frame[-1]
-    stacked = np.repeat(np.ascontiguousarray(frame)[None, ...], 4, axis=0)
+    stacked = np.repeat(np.ascontiguousarray(frame)[None, ...], max(int(n_frames), 1), axis=0)
     return stacked
 
 
