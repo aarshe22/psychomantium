@@ -132,9 +132,10 @@ def parse_intention(text: str, next_id: int) -> Intention:
     intent.kind = "world"
     intent.status = "submitted"
     intent.active = True
-    intent.engine_action = "standing world prompt"
+    intent.engine_action = "scene authoring (Gemma + FLUX.2 Klein reseed)"
     intent.note = (
-        "Kept as an ongoing world rule. This 1B checkpoint has prompt_conditioning=null, "
-        "so the DiT may ignore the words; we still send them via set_prompt when possible."
+        "Standing world rule. Waypoint-1.5-1B cannot condition on text; when scene "
+        "authoring is loaded, Gemma writes a Klein prompt and FLUX.2-klein-4B paints "
+        "a new first-person seed, then the world model continues from those pixels."
     )
     return intent

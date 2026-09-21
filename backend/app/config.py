@@ -14,6 +14,7 @@ MAX_FPS = float(os.environ.get("MAX_FPS", "30"))
 HOST_BIND = os.environ.get("HOST_BIND", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8791"))
 ENGINE_SHA = "b3f1e725b222679a517632918cc78bba0c9fa433"
+SCENE_AUTHORING = os.environ.get("SCENE_AUTHORING", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 MODELS: list[dict[str, Any]] = [
     {

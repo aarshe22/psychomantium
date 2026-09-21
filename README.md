@@ -58,7 +58,19 @@ Then open http://127.0.0.1:8790 on your laptop.
 docker compose down
 ```
 
-Weights stay in `data/hf-cache/`. Snapshots stay in `data/outputs/`. Saved experience knobs stay in `data/preferences/preferences.json` (bind-mounted, survives rebuilds).
+### Model weight cache (survives rebuilds)
+
+Weights are **not** stored in the image. Host directories are bind-mounted; `docker compose build`, `down`, and container recreate leave them in place. Prefetch with `docker compose exec backend python scripts/prefetch_authoring.py`.
+
+| Host path | Container path | What lives there |
+|---|---|---|
+| `data/hf-cache/` | `/data/hf-cache` | Hugging Face hub (`HF_HOME` / `HF_HUB_CACHE`): Waypoint 1B 360p+720p, TAEHV, Gemma 4 E4B GGUF, FLUX.2-klein-4B |
+| `data/torch-cache/` | `/data/torch-cache` | `torch.compile` inductor/triton + Torch Hub |
+| `data/xdg-cache/` | `/data/xdg-cache` and `/root/.cache` | Catch-all if a library ignores `HF_HOME` |
+| `data/outputs/` | `/data/outputs` | Snapshots / probe movies |
+| `data/preferences/` | `/data/preferences` | `preferences.json` |
+
+Do not delete `data/hf-cache/` unless you intend to re-download tens of gigabytes.
 
 ### Logs
 
@@ -126,6 +138,8 @@ The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch i
 - `backend/` FastAPI + GPU worker
 - `frontend/` React + Vite
 - `docker/` Dockerfiles
-- `data/hf-cache/` model cache (not source)
+- `data/hf-cache/` Hugging Face weight cache (bind-mounted, not in git)
+- `data/torch-cache/` compile caches
+- `data/xdg-cache/` extra `~/.cache` bind-mount
 - `data/outputs/` snapshots / probe movies
 - `docs/` limitations and measured results

@@ -1,5 +1,21 @@
 name: psychomantium
 
+# Weight + compile caches live on the host (./data/*) and are bind-mounted.
+# docker compose build / down does not delete them.
+
+x-cache-env: &cache-env
+  HF_HOME: /data/hf-cache
+  HF_HUB_CACHE: /data/hf-cache/hub
+  HUGGINGFACE_HUB_CACHE: /data/hf-cache/hub
+  TRANSFORMERS_CACHE: /data/hf-cache/transformers
+  DIFFUSERS_CACHE: /data/hf-cache/diffusers
+  HF_DATASETS_CACHE: /data/hf-cache/datasets
+  HF_XET_CACHE: /data/hf-cache/xet
+  TORCH_HOME: /data/torch-cache/hub
+  TORCHINDUCTOR_CACHE_DIR: /data/torch-cache/inductor
+  TRITON_CACHE_DIR: /data/torch-cache/triton
+  XDG_CACHE_HOME: /data/xdg-cache
+
 services:
   backend:
     build:
@@ -17,20 +33,20 @@ services:
     gpus: all
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:8791:8791"
       - "10.1.1.100:8791:8791"
     environment:
-      HF_HOME: /data/hf-cache
-      HUGGINGFACE_HUB_CACHE: /data/hf-cache/hub
+      <<: *cache-env
       OUTPUT_DIR: /data/outputs
       PREFS_DIR: /data/preferences
-      TORCHINDUCTOR_CACHE_DIR: /data/torch-cache/inductor
-      TRITON_CACHE_DIR: /data/torch-cache/triton
       WAYPOINT_MODEL: ${WAYPOINT_MODEL:-Overworld/Waypoint-1.5-1B-360P}
       WAYPOINT_QUANT: ${WAYPOINT_QUANT:-}
+      SCENE_AUTHORING: ${SCENE_AUTHORING:-1}
       HF_TOKEN: ${HF_TOKEN:-}
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
       # Host proxy 10.1.1.100 is not reachable from the Docker bridge; use the gateway.
       HTTP_PROXY: http://host.docker.internal:3128
       HTTPS_PROXY: http://host.docker.internal:3128
@@ -39,8 +55,10 @@ services:
     volumes:
       - ./backend:/app
       - ./data/hf-cache:/data/hf-cache
-      - ./data/outputs:/data/outputs
       - ./data/torch-cache:/data/torch-cache
+      - ./data/xdg-cache:/data/xdg-cache
+      - ./data/xdg-cache:/root/.cache
+      - ./data/outputs:/data/outputs
       - ./data/preferences:/data/preferences
     shm_size: "2gb"
     restart: unless-stopped
@@ -78,23 +96,27 @@ services:
     gpus: all
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
     environment:
-      HF_HOME: /data/hf-cache
-      HUGGINGFACE_HUB_CACHE: /data/hf-cache/hub
+      <<: *cache-env
       OUTPUT_DIR: /data/outputs
-      TORCHINDUCTOR_CACHE_DIR: /data/torch-cache/inductor
-      TRITON_CACHE_DIR: /data/torch-cache/triton
       WAYPOINT_MODEL: ${WAYPOINT_MODEL:-Overworld/Waypoint-1.5-1B-360P}
       WAYPOINT_QUANT: ${WAYPOINT_QUANT:-}
+      SCENE_AUTHORING: ${SCENE_AUTHORING:-1}
       HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
       HTTP_PROXY: http://host.docker.internal:3128
       HTTPS_PROXY: http://host.docker.internal:3128
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
       NVIDIA_VISIBLE_DEVICES: "0"
     volumes:
+      - ./backend:/app
       - ./data/hf-cache:/data/hf-cache
-      - ./data/outputs:/data/outputs
       - ./data/torch-cache:/data/torch-cache
+      - ./data/xdg-cache:/data/xdg-cache
+      - ./data/xdg-cache:/root/.cache
+      - ./data/outputs:/data/outputs
     shm_size: "2gb"
     working_dir: /app
     command: ["python", "scripts/inference_probe.py"]

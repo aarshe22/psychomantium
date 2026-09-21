@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.env.local
 *.mp4
 *.webm
 .DS_Store

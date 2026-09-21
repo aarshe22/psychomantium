@@ -10,7 +10,16 @@ ARG no_proxy
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/data/hf-cache \
+    HF_HUB_CACHE=/data/hf-cache/hub \
     HUGGINGFACE_HUB_CACHE=/data/hf-cache/hub \
+    TRANSFORMERS_CACHE=/data/hf-cache/transformers \
+    DIFFUSERS_CACHE=/data/hf-cache/diffusers \
+    HF_DATASETS_CACHE=/data/hf-cache/datasets \
+    HF_XET_CACHE=/data/hf-cache/xet \
+    TORCH_HOME=/data/torch-cache/hub \
+    TORCHINDUCTOR_CACHE_DIR=/data/torch-cache/inductor \
+    TRITON_CACHE_DIR=/data/torch-cache/triton \
+    XDG_CACHE_HOME=/data/xdg-cache \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH=/opt/venv/bin:$PATH
 
@@ -29,7 +38,8 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.11.0
 
 COPY backend/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt \
-    && pip install "world_engine @ git+https://github.com/Overworldai/world_engine.git@b3f1e725b222679a517632918cc78bba0c9fa433"
+    && pip install "world_engine @ git+https://github.com/Overworldai/world_engine.git@b3f1e725b222679a517632918cc78bba0c9fa433" \
+    && pip install "https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.36-cu128-Basic-linux-20260416/llama_cpp_python-0.3.36%2Bcu128.basic-cp312-cp312-linux_x86_64.whl"
 
 COPY backend /app
 WORKDIR /app
