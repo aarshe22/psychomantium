@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from . import config
+from .dream_scene import DREAM_WORLD_PROMPT
 
 PREFS_DIR = config.PREFS_DIR
 PREFS_PATH = PREFS_DIR / "preferences.json"
@@ -14,27 +15,23 @@ DEFAULTS: dict[str, Any] = {
     "resolution": 360,
     "temperature": 0.4,
     "look_sensitivity": 1.75,
-    "jpeg_quality": 78,
+    "jpeg_quality": 86,
     "wander": 0.0,
     "motion_smoothing": 0.15,
     "dream_sharpness": 0.45,
     "steer_move": True,
     "initial_note": "An explorable dream",
-    "world_prompt": (
-        "There is a standard road grid, and buildings. "
-        "Purely exploratory first-person walk: empty unarmed hands. "
-        "No weapons, firearms, hammers, swords, tools, or any held object."
-    ),
+    "world_prompt": DREAM_WORLD_PROMPT,
     "model_id": "Overworld/Waypoint-1.5-1B-360P",
     "fps_lock": False,
-    "inpaint": False,
+    "inpaint": True,
 }
 
 SPECS: dict[str, dict[str, float | str]] = {
     "resolution": {"min": 360, "max": 720, "step": 60, "label": "Output resolution"},
     "temperature": {"min": 0.4, "max": 1.8, "step": 0.05, "label": "Inference temperature"},
     "look_sensitivity": {"min": 0.25, "max": 2.5, "step": 0.05, "label": "Look sensitivity"},
-    "jpeg_quality": {"min": 40, "max": 95, "step": 1, "label": "Stream JPEG quality"},
+    "jpeg_quality": {"min": 55, "max": 95, "step": 1, "label": "Stream JPEG quality"},
     "wander": {"min": 0.0, "max": 0.3, "step": 0.01, "label": "Idle wander"},
     "motion_smoothing": {"min": 0.0, "max": 0.85, "step": 0.05, "label": "Motion smoothing"},
     "dream_sharpness": {"min": 0.0, "max": 1.0, "step": 0.05, "label": "Dream sharpness"},
@@ -49,7 +46,10 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["resolution"] = int(max(360, min(720, round(float(src["resolution"]) / 60) * 60)))
     out["temperature"] = float(max(0.4, min(1.8, float(src["temperature"]))))
     out["look_sensitivity"] = float(max(0.25, min(2.5, float(src["look_sensitivity"]))))
-    out["jpeg_quality"] = int(max(40, min(95, round(float(src["jpeg_quality"])))))
+    jpeg = int(max(40, min(95, round(float(src["jpeg_quality"])))))
+    if jpeg <= 50:
+        jpeg = int(DEFAULTS["jpeg_quality"])
+    out["jpeg_quality"] = int(max(55, min(95, jpeg)))
     out["wander"] = float(max(0.0, min(0.3, float(src["wander"]))))
     out["motion_smoothing"] = float(max(0.0, min(0.85, float(src["motion_smoothing"]))))
     out["dream_sharpness"] = float(max(0.0, min(1.0, float(src["dream_sharpness"]))))
@@ -58,12 +58,22 @@ def clamp_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["initial_note"] = note
     world = str(src.get("world_prompt") if src.get("world_prompt") is not None else DEFAULTS["world_prompt"])[:500]
     world = world.strip()
-    if world in {"", "There is a standard road grid, and buildings.", "There is a standard road grid, and buildings"}:
+    migrated_road = world.startswith("There is a standard road grid") or world in {
+        "",
+        "There is a standard road grid, and buildings.",
+        "There is a standard road grid, and buildings",
+    }
+    if migrated_road:
         world = DEFAULTS["world_prompt"]
+        out["inpaint"] = True
     out["world_prompt"] = world
     out["model_id"] = config.resolve_model(str(src.get("model_id") or DEFAULTS["model_id"]))
+    native_h = config.frame_size_for(out["model_id"])[1]
+    if out["resolution"] > native_h:
+        out["resolution"] = native_h
     out["fps_lock"] = bool(src.get("fps_lock", False))
-    out["inpaint"] = bool(src.get("inpaint", False))
+    if not migrated_road:
+        out["inpaint"] = bool(src.get("inpaint", DEFAULTS["inpaint"]))
     return out
 
 
@@ -72,7 +82,15 @@ def load_prefs() -> dict[str, Any]:
     if PREFS_PATH.is_file():
         try:
             data = json.loads(PREFS_PATH.read_text())
-            return clamp_prefs(data)
+            prefs = clamp_prefs(data)
+            if (
+                str(data.get("world_prompt") or "") != prefs["world_prompt"]
+                or int(data.get("jpeg_quality") or 0) != int(prefs["jpeg_quality"])
+                or int(data.get("resolution") or 0) != int(prefs["resolution"])
+                or bool(data.get("inpaint", False)) != bool(prefs["inpaint"])
+            ):
+                save_prefs(prefs)
+            return prefs
         except Exception:
             return dict(DEFAULTS)
     return dict(DEFAULTS)

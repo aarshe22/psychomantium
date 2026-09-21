@@ -21,6 +21,14 @@ import torch
 from PIL import Image
 
 from . import config
+from .dream_scene import (
+    DREAM_BREATH_PROMPT,
+    DREAM_DRIFT_PROMPT,
+    DREAM_LOOKOUT_PROMPT,
+    LOCK_STREAK,
+    analyze_frame,
+    rgb_to_seed,
+)
 from .intentions import Intention, parse_intention
 from .prefs import clamp_prefs, load_prefs, output_size, save_prefs
 from .scene_authoring import authoring
@@ -181,6 +189,15 @@ class EngineWorker:
         self._idle_batches = 0
         self._inpainted_this_idle = False
         self._intent_inpaint_queue: deque[tuple[str, int]] = deque()
+        self._open_seeds: deque[torch.Tensor] = deque(maxlen=6)
+        self._lock_streak = 0
+        self._freeze_walk = False
+        self._lookout_pending = False
+        self._last_scene_event = ""
+        self._last_scene = None
+        self._last_rescue_at = 0.0
+        self._idle_since: Optional[float] = None
+        self._grace_batches = 0
 
     def _gpu_call(self, op: str, *args, wait: bool = True):
         box: dict[str, Any] = {"err": None, "result": None}
@@ -426,7 +443,9 @@ class EngineWorker:
             self.controls.analog = (ax, ay)
             allowed = {"left", "right", "up", "down"}
             self.controls.arrows = {a for a in (arrows or []) if a in allowed}
-            self.controls.scroll = 0
+            self.controls.scroll = int(scroll)
+            if abs(int(scroll)) >= 80:
+                self._lookout_pending = True
             self.controls.seq += 1
             return self.controls.seq
 
@@ -561,7 +580,13 @@ class EngineWorker:
         if "down" in arrows:
             mouse[1] += 0.22 * sens
 
-        if prefs.get("steer_move"):
+        if self._freeze_walk:
+            buttons.discard(87)
+            buttons.discard(83)
+            if abs(analog[1]) > 0.18 and analog[1] < -0.18:
+                buttons.discard(87)
+
+        if prefs.get("steer_move") and not self._freeze_walk:
             mag = (analog[0] ** 2 + analog[1] ** 2) ** 0.5
             if mag > 0.18:
                 if analog[1] < -0.18:
@@ -649,6 +674,15 @@ class EngineWorker:
             self._idle_batches = 0
             self._inpainted_this_idle = False
             self._intent_inpaint_queue.clear()
+            self._open_seeds.clear()
+            self._lock_streak = 0
+            self._freeze_walk = False
+            self._lookout_pending = False
+            self._last_scene_event = ""
+            self._last_scene = None
+            self._last_rescue_at = 0.0
+            self._idle_since = None
+            self._grace_batches = 0
             self.inpaint_status = "armed" if bool(self.prefs.get("inpaint", False)) else "off"
         try:
             return self._gpu_call("start", seed)
@@ -674,16 +708,26 @@ class EngineWorker:
         self.try_set_prompt()
         frames = decoded.detach().to("cpu").numpy()
         self.last_frames = frames
+        self._note_open_frame(frames)
         self._publish_batch(frames, gen_ms=0.0, kind="seed")
         self.frames_done += int(frames.shape[0])
         from world_engine import CtrlInput
 
         try:
             warm = engine.gen_frame(ctrl=CtrlInput())
-            frames = warm.detach().to("cpu").numpy()
-            self.last_frames = frames
-            self._publish_batch(frames, gen_ms=0.0, kind="generated")
-            self.frames_done += int(frames.shape[0])
+            warm_np = warm.detach().to("cpu").numpy()
+            seed_m = analyze_frame(frames)
+            warm_m = analyze_frame(warm_np)
+            if warm_m.openness + 0.06 < seed_m.openness or (warm_m.locked and not seed_m.locked):
+                engine.reset()
+                decoded = engine.append_frame(seed)
+                frames = decoded.detach().to("cpu").numpy()
+                self.last_frames = frames
+            else:
+                self.last_frames = warm_np
+                self._publish_batch(warm_np, gen_ms=0.0, kind="generated")
+                self.frames_done += int(warm_np.shape[0])
+                self._note_open_frame(warm_np)
         except Exception:
             pass
         return {"ok": True, "prompt_applied": False, "reason": "prompt_conditioning is null on this checkpoint"}
@@ -696,8 +740,15 @@ class EngineWorker:
 
     def _reseed_on_gpu(self) -> None:
         engine = self.engine
-        seed = self.original_seed
+        seed = self._open_seeds[-1] if self._open_seeds else self.original_seed
         if engine is None or seed is None:
+            return
+        self._reseed_from_tensor(seed, kind="seed")
+        self._last_scene_event = "open-reseed" if self._open_seeds else "start-reseed"
+
+    def _reseed_from_tensor(self, seed: torch.Tensor, kind: str = "seed") -> None:
+        engine = self.engine
+        if engine is None:
             return
         engine.reset()
         decoded = engine.append_frame(seed)
@@ -708,7 +759,10 @@ class EngineWorker:
         self.view_pitch = 0.0
         self.reset_look = False
         self.smooth_mouse = [0.0, 0.0]
-        self._publish_batch(frames, gen_ms=0.0, kind="seed")
+        self._freeze_walk = False
+        self._lookout_pending = False
+        self._lock_streak = 0
+        self._publish_batch(frames, gen_ms=0.0, kind=kind)
 
     def stop_session(self) -> None:
         with self.lock:
@@ -842,6 +896,7 @@ class EngineWorker:
             "composed_prompt": self.composed_prompt(),
             "prompt_apply": self.last_prompt_result,
             "view": {"yaw": self.view_yaw, "pitch": self.view_pitch, "resetting": self.reset_look},
+            "scene": self._scene_public(),
             "native_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
             "stream_size": {"width": w, "height": h},
         }
@@ -907,6 +962,7 @@ class EngineWorker:
             meta["composed_prompt"] = self.composed_prompt()
             meta["session_world_prompt"] = self.session_world_prompt()
             meta["prompt_apply"] = self.last_prompt_result
+            meta["scene"] = self._scene_public()
             self.latest_meta = meta
             self.frame_slot.notify_all()
 
@@ -920,7 +976,113 @@ class EngineWorker:
             self.latest_meta = meta
             self.frame_slot.notify_all()
 
-    def _idle_inpaint_on_gpu(self, modifier: str | None = None) -> None:
+    def _scene_public(self) -> dict[str, Any]:
+        m = self._last_scene
+        return {
+            "lock": None if m is None else round(m.lock, 3),
+            "openness": None if m is None else round(m.openness, 3),
+            "locked": bool(m.locked) if m is not None else False,
+            "open": bool(m.open) if m is not None else False,
+            "event": self._last_scene_event,
+            "open_memories": len(self._open_seeds),
+            "walk_held": self._freeze_walk,
+        }
+
+    def _note_open_frame(self, frames: np.ndarray | None) -> None:
+        if frames is None or frames.size == 0:
+            return
+        metrics = analyze_frame(frames)
+        self._last_scene = metrics
+        if not metrics.open:
+            return
+        stacked = rgb_to_seed(frames)
+        self._open_seeds.append(torch.from_numpy(np.ascontiguousarray(stacked)))
+
+    def _observe_scene(self, frames: np.ndarray) -> None:
+        metrics = analyze_frame(frames)
+        self._last_scene = metrics
+        if metrics.open:
+            self._lock_streak = 0
+            stacked = rgb_to_seed(frames)
+            self._open_seeds.append(torch.from_numpy(np.ascontiguousarray(stacked)))
+            self._freeze_walk = False
+            return
+        if metrics.locked:
+            self._lock_streak += 1
+            if self._lock_streak >= LOCK_STREAK:
+                self._freeze_walk = True
+            if metrics.lock >= 0.62 and self.view_pitch < -1.35:
+                self._lookout_pending = True
+        else:
+            self._lock_streak = max(0, self._lock_streak - 1)
+
+    def _rescue_ready(self) -> bool:
+        if self._grace_batches < 6:
+            return False
+        return (time.monotonic() - self._last_rescue_at) >= 8.0
+
+    def _maybe_scene_rescue(self) -> bool:
+        if self.stop_event.is_set() or self.last_frames is None:
+            return False
+        lookout = self._lookout_pending
+        locked = self._lock_streak >= LOCK_STREAK and self._freeze_walk
+        if lookout:
+            self._lookout_pending = False
+            last = self._last_scene
+            if last is not None and last.open and not last.locked:
+                return False
+            if not self._rescue_ready():
+                return False
+            if self._rescue_from_memory("lookout"):
+                return True
+            return self._klein_scene_cut(DREAM_LOOKOUT_PROMPT, "lookout")
+        if locked and self._rescue_ready():
+            if self._rescue_from_memory("breath"):
+                return True
+            return self._klein_scene_cut(DREAM_BREATH_PROMPT, "breath")
+        return False
+
+    def _rescue_from_memory(self, event: str) -> bool:
+        if not self._open_seeds:
+            return False
+        seed = self._open_seeds[-1]
+        self._reseed_from_tensor(seed, kind="open")
+        self._last_scene_event = event
+        self._last_rescue_at = time.monotonic()
+        self._grace_batches = 0
+        return True
+
+    def _klein_scene_cut(self, prompt: str, event: str) -> bool:
+        if self.engine is None or self.last_frames is None:
+            return False
+        try:
+            if authoring.pipeline is None:
+                self.inpaint_status = "loading"
+                self.inpaint_progress = 0.0
+                self._publish_inpaint_progress(0.0)
+                authoring.load()
+            self._scene_inpaint_on_gpu(fallback_prompt=prompt, kind=event)
+            self._last_scene_event = event
+            self._last_rescue_at = time.monotonic()
+            self._grace_batches = 0
+            self._inpainted_this_idle = True
+            return True
+        except Exception as exc:
+            self.inpaint_status = "error"
+            self.last_error = f"scene-{event}: {type(exc).__name__}: {exc}"
+            if self.original_seed is not None:
+                self._reseed_from_tensor(self.original_seed, kind="seed")
+                self._last_scene_event = "start-fallback"
+                return True
+            return False
+
+    def _scene_inpaint_on_gpu(
+        self,
+        modifier: str | None = None,
+        fallback_prompt: str | None = None,
+        kind: str = "inpaint",
+        replace_original: bool = False,
+    ) -> None:
         engine = self.engine
         frames = self.last_frames
         if engine is None or frames is None or frames.size == 0:
@@ -933,6 +1095,7 @@ class EngineWorker:
             self.frame_size,
             user_request=modifier,
             on_progress=self._publish_inpaint_progress,
+            fallback_prompt=fallback_prompt,
         )
         arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
         stacked = np.repeat(arr[None, ...], 4, axis=0)
@@ -941,11 +1104,23 @@ class EngineWorker:
         decoded = engine.append_frame(seed)
         out = decoded.detach().to("cpu").numpy()
         self.last_frames = out
-        self.original_seed = seed.detach().clone()
+        if replace_original:
+            self.original_seed = seed.detach().clone()
+        self._note_open_frame(out)
+        self._freeze_walk = False
+        self._lock_streak = 0
         self.inpaint_status = "done"
         self.inpaint_progress = 1.0
-        self._publish_batch(out, gen_ms=0.0, kind="inpaint")
+        self._publish_batch(out, gen_ms=0.0, kind=kind)
         self.inpaint_progress = 0.0
+
+    def _idle_inpaint_on_gpu(self, modifier: str | None = None) -> None:
+        self._scene_inpaint_on_gpu(
+            modifier=modifier,
+            fallback_prompt=None if modifier else DREAM_DRIFT_PROMPT,
+            kind="inpaint" if modifier else "drift",
+            replace_original=False,
+        )
 
     def _maybe_directed_inpaint(self) -> bool:
         """Send Intention → Klein edit of the current still. Ignores Auto-InPaint."""
@@ -997,16 +1172,20 @@ class EngineWorker:
             return False
         if self._user_steering():
             self._idle_batches = 0
+            self._idle_since = None
             self._inpainted_this_idle = False
             if self.inpaint_status in {"done", "running"}:
                 self.inpaint_status = "armed"
             elif self.inpaint_status == "off":
                 self.inpaint_status = "armed"
             return False
+        now = time.monotonic()
+        if self._idle_since is None:
+            self._idle_since = now
         self._idle_batches += 1
         if self._inpainted_this_idle:
             return False
-        if self._idle_batches < 10:
+        if (now - self._idle_since) < 5.0:
             if self.inpaint_status in {"off", "done"}:
                 self.inpaint_status = "armed"
             return False
@@ -1044,6 +1223,8 @@ class EngineWorker:
                     self._prompt_dirty = False
                 if self._maybe_directed_inpaint():
                     continue
+                if self._maybe_scene_rescue():
+                    continue
                 if self._maybe_idle_inpaint():
                     continue
                 if self.stop_event.is_set():
@@ -1064,8 +1245,10 @@ class EngineWorker:
                 n = int(frames.shape[0])
                 self.last_gen_ms = gen_ms
                 self.batches_done += 1
+                self._grace_batches += 1
                 self.frames_done += n
                 self.last_frames = frames
+                self._observe_scene(frames)
                 if self.recording:
                     self.record_frames.extend([frames[i] for i in range(n)])
                 self._maybe_verify(frames)
@@ -1107,6 +1290,8 @@ class EngineWorker:
             "prompt_apply": self.last_prompt_result,
             "prefs": dict(self.prefs),
             "view": {"yaw": self.view_yaw, "pitch": self.view_pitch, "resetting": self.reset_look},
+            "scene": self._scene_public(),
+            "native_size": {"width": self.frame_size[0], "height": self.frame_size[1]},
         }
 
 

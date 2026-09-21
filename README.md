@@ -96,13 +96,13 @@ Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B`
 - **W** walk forward · **Z** walk back
 - **← →** turn left / right · **↑ ↓** look up / down
 - **R** reset orientation to the horizon
-- **U** reset to the original seed (`engine.reset()` + `append_frame`)
+- **U** reset to the last open view (`engine.reset()` + `append_frame`), or the original seed if none
 - **Space** jump · click the viewport for pointer-lock mouse look
 - Session: upload a photograph (best prior), CC0 empty path/road stills, or type a one-liner and FLUX.2 Klein caches a new seed under `data/seeds/painted/` (trash can deletes those)
-- Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
+- Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** unpins and collapses it.
 - Movement keys are ignored while the intention/prompt fields are focused
-- **Enter** in the intention field submits; that line inpaints the current still (Klein), even if Auto-InPaint is off
-- Mouse scroll wheel is ignored (not sent as `CtrlInput.scroll_wheel`)
+- **Enter** in the intention field submits; that line inpaints the current still (Klein), even if Dream drift is off
+- Mouse wheel look-out from a close surface reseeds the last open view (not engine zoom)
 
 ## Experience knobs
 
@@ -110,15 +110,15 @@ Sliders apply live (not only after save). **Save preferences** writes `data/pref
 
 | Knob | What it actually does |
 |---|---|
-| Output resolution | Resizes generated frames for the JPEG stream (360–720). Native generation is 640×360 or 1280×720 from the selected checkpoint. |
+| Output resolution | Resizes generated frames for the JPEG stream, capped at the loaded checkpoint’s height. |
 | Inference temperature | Multiplies the `torch.randn` start-noise inside `gen_frame`. Default 0.40 (engine 1.0 is hotter). |
 | Look sensitivity | Scales mouse / ball / arrow look velocity |
-| Stream JPEG quality | Encode quality only |
+| Stream JPEG quality | Encode quality only (default 86). Low values add mush the KV cache copies. |
 | Idle wander | Random look when you are not steering |
 | Motion smoothing | Exponential blend on look |
 | Dream sharpness | Remaps the 4-step noise schedule (same step count; compiled graph stays valid) |
 
-**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. **Speak** always runs FLUX.2 Klein on the current still using the standing prompt plus the intention as the edit modifier (Auto-InPaint does not have to be on). **Auto-InPaint** is idle-only: stand still and Klein refines detail with a fixed prompt. **Paint seed from prompt** paints a start frame before you enter.
+**Standing world prompt** is persisted with preferences. On this 1B checkpoint `set_prompt` is not wired into the DiT. **Send Intention** always runs FLUX.2 Klein on the current still. **Dream drift** is idle-only: stand still and Klein continues into an adjacent place (not a detail-sharpen of one patch). Walking into a repeating surface pauses forward motion and reseeds the last open view, or Klein-opens the sky. **Paint seed from prompt** paints a start frame before you enter.
 
 The viewport paces the 4 JPEG subframes from each `gen_frame` across the batch interval (EMA), instead of flashing all four at once. Generation is uncapped by default; click the FPS badge to lock 30.
 

@@ -28,7 +28,7 @@ export const PREF_FIELDS: {
     min: 360,
     max: 720,
     step: 60,
-    hint: "JPEG stream size. Native generation is 640×360 or 1280×720 depending on the selected checkpoint; this slider only resizes the stream.",
+    hint: "JPEG stream size. Capped at the loaded checkpoint (360p or 720p). This never invents extra model pixels.",
   },
   {
     key: "temperature",
@@ -49,10 +49,10 @@ export const PREF_FIELDS: {
   {
     key: "jpeg_quality",
     label: "Stream JPEG quality",
-    min: 40,
+    min: 55,
     max: 95,
     step: 1,
-    hint: "Browser encode quality. Does not change the model.",
+    hint: "Browser encode quality. Low values add mush that the world model copies. Default 86.",
   },
   {
     key: "wander",

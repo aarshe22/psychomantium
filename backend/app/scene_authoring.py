@@ -428,11 +428,12 @@ class SceneAuthoring:
         size_wh: tuple[int, int],
         user_request: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        fallback_prompt: str | None = None,
     ) -> tuple[Image.Image, str]:
         """Klein edit of the current view. No VLM.
 
-        Idle Auto-InPaint uses DETAIL_PROMPT. Spoken intentions pass user_request as
-        a modifier on the standing still.
+        Idle dream-drift and texture-lock rescue pass a scene prompt via
+        fallback_prompt. Spoken intentions pass user_request as a modifier.
         """
         if self.pipeline is None:
             raise AuthoringNotReady(self.error or "Klein pipeline not loaded")
@@ -449,7 +450,7 @@ class SceneAuthoring:
                 f"{EXPLORATION_GUARD}"
             )
         else:
-            prompt = self.DETAIL_PROMPT
+            prompt = (fallback_prompt or "").strip() or self.DETAIL_PROMPT
         result = self.run_klein(resized, prompt, th, tw, on_progress=on_progress)
         return result.resize((w, h), Image.Resampling.LANCZOS), prompt
 

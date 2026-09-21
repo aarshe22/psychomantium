@@ -239,10 +239,11 @@ async def stream(ws: WebSocket):
                     mouse = msg.get("mouse") or [0, 0]
                     analog = msg.get("analog") or [0, 0]
                     arrows = msg.get("arrows") or []
+                    scroll = int(msg.get("scroll") or 0)
                     seq = worker.set_controls(
                         buttons,
                         (float(mouse[0]), float(mouse[1])),
-                        0,
+                        scroll,
                         (float(analog[0]), float(analog[1])),
                         list(arrows),
                     )

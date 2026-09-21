@@ -19,17 +19,17 @@ const DEFAULT_PREFS: Prefs = {
   resolution: 360,
   temperature: 0.4,
   look_sensitivity: 1.75,
-  jpeg_quality: 78,
+  jpeg_quality: 86,
   wander: 0.0,
   motion_smoothing: 0.15,
   dream_sharpness: 0.45,
   steer_move: true,
   initial_note: "An explorable dream",
   world_prompt:
-    "There is a standard road grid, and buildings. Purely exploratory first-person walk: empty unarmed hands. No weapons, firearms, hammers, swords, tools, or any held object.",
+    "An imaginary first-person dream you can walk through. Eye-level, a path or clearing ahead, open sky when looking out. Empty unarmed hands. No weapons, tools, HUD, or text overlay.",
   model_id: "Overworld/Waypoint-1.5-1B-360P",
   fps_lock: false,
-  inpaint: false,
+  inpaint: true,
 };
 
 function parseJson(text: string, fallback: string) {
@@ -77,6 +77,7 @@ export default function App() {
   const mouseRef = useRef<[number, number]>([0, 0]);
   const analogRef = useRef<[number, number]>([0, 0]);
   const arrowsRef = useRef<Set<string>>(new Set());
+  const scrollRef = useRef(0);
   const typingRef = useRef(false);
   const lastUrl = useRef<string | null>(null);
   const frameTimes = useRef<number[]>([]);
@@ -167,9 +168,11 @@ export default function App() {
         mouse: mouseRef.current,
         analog: analogRef.current,
         arrows: [...arrowsRef.current],
+        scroll: scrollRef.current,
       }),
     );
     mouseRef.current = [0, 0];
+    scrollRef.current = 0;
   }, []);
 
   const clearKeys = useCallback(() => {
@@ -596,9 +599,18 @@ export default function App() {
         mouseRef.current[1] += e.movementY / 420;
       }
     };
+    const onWheel = (e: WheelEvent) => {
+      if (!dreaming) return;
+      const t = e.target as HTMLElement | null;
+      if (!document.pointerLockElement && !t?.closest?.(".viewport")) return;
+      e.preventDefault();
+      scrollRef.current += e.deltaY;
+    };
     window.addEventListener("mousemove", onMove);
+    window.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("wheel", onWheel);
     };
   }, [dreaming]);
 
@@ -651,13 +663,13 @@ export default function App() {
             className={`pill metric toggle ${prefs.fps_lock ? "on" : ""}`}
             title={
               prefs.fps_lock
-                ? "30 fps cap on. Click to stream uncapped."
-                : "Uncapped. Click to lock 30 fps."
+                ? "Generation fps (gen_frame). 30 fps display cap on. Click to uncap."
+                : "Generation fps from gen_frame wall time — not the paced display rate. Click to lock ~30."
             }
             aria-pressed={prefs.fps_lock}
             onClick={toggleFpsLock}
           >
-            <span className="metric-k">{prefs.fps_lock ? "fps 30" : "fps"}</span>
+            <span className="metric-k">{prefs.fps_lock ? "gen 30" : "gen fps"}</span>
             <strong>
               {dreaming && typeof stats.generation_fps === "number" && stats.generation_fps > 0
                 ? stats.generation_fps.toFixed(1)
@@ -682,13 +694,13 @@ export default function App() {
                 : stats.inpaint_status === "loading"
                   ? "Loading FLUX.2 Klein for inpaint"
                   : prefs.inpaint
-                    ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Send Intention always inpaints the current view, even if this is off."
-                    : "Auto-InPaint off. Idle standing still will not refine. Send Intention still inpaints the current view with your intention."
+                    ? "Dream drift on. After a few seconds standing still, Klein continues the dream into an adjacent place instead of sharpening one patch. Texture lock and look-out still rescue the view even if this is off. Send Intention always inpaints."
+                    : "Dream drift off. Idle standing still will not rewrite the view. Texture-lock rescue and Send Intention still run."
             }
             aria-pressed={prefs.inpaint}
             onClick={toggleInpaint}
           >
-            <span className="metric-k">Auto-InPaint</span>
+            <span className="metric-k">Dream drift</span>
             <strong>
               {stats.inpaint_status === "loading"
                 ? "load"
@@ -718,11 +730,20 @@ export default function App() {
               type="button"
               className="ghost rail-toggle"
               onClick={() => {
-                if (railPinned) return;
+                if (railPinned) {
+                  setRailPinned(false);
+                  setRailCollapsed(true);
+                  return;
+                }
                 setRailCollapsed((v) => !v);
               }}
-              disabled={railPinned}
-              title={railPinned ? "Unpin to collapse" : railCollapsed ? "Show controls" : "Collapse left"}
+              title={
+                railCollapsed && !railPinned
+                  ? "Show controls"
+                  : railPinned
+                    ? "Unpin and hide the rail"
+                    : "Collapse left"
+              }
             >
               {railCollapsed && !railPinned ? "Controls" : "Hide"}
             </button>
@@ -968,7 +989,20 @@ export default function App() {
                 <div>
                   <dt>stream</dt>
                   <dd>
-                    {prefs.resolution}p · t={prefs.temperature.toFixed(2)}
+                    {prefs.resolution}p jpeg {prefs.jpeg_quality}
+                    {stats.native_size?.height
+                      ? ` · native ${stats.native_size.height}p`
+                      : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt>scene</dt>
+                  <dd>
+                    {stats.scene
+                      ? `open ${stats.scene.openness ?? "—"} · lock ${stats.scene.lock ?? "—"} · ${
+                          stats.scene.event || (stats.scene.locked ? "locked" : stats.scene.open ? "open" : "—")
+                        } · mem ${stats.scene.open_memories ?? 0}`
+                      : "—"}
                   </dd>
                 </div>
                 <div>
@@ -1009,6 +1043,8 @@ export default function App() {
                     machine continues that view as you look and walk. It is not a diagnosis and not a map of you.
                     On the loaded Waypoint 1B checkpoint, typed text does not drive the DiT — movement and the
                     current pixels do. Klein inpaint is how an intention edits the view you are in.
+                    Walking into a wall and looking out used to tile that wall; the session now
+                    remembers an open view and cuts back to it (or asks Klein to open the sky).
                   </p>
 
                   <h3>Start a dream</h3>
@@ -1038,12 +1074,15 @@ export default function App() {
                     <dd>Waypoint 1B at 360p or 720p. Switching reloads weights.</dd>
                     <dt>gpu</dt>
                     <dd>SM utilization from this machine.</dd>
-                    <dt>fps</dt>
-                    <dd>Click to lock ~30 fps, or leave uncapped.</dd>
-                    <dt>Auto-InPaint</dt>
+                    <dt>gen fps</dt>
                     <dd>
-                      When on, standing still lets FLUX.2 Klein refine the current frame. Walking continues from
-                      those pixels. Fill is progress while Klein runs.
+                      DiT generation rate, not the paced display. Click to lock ~30, or leave
+                      uncapped.
+                    </dd>
+                    <dt>Dream drift</dt>
+                    <dd>
+                      When on, standing still lets Klein continue the dream into an adjacent
+                      place. Texture-lock rescue still runs if you walk into a wall.
                     </dd>
                   </dl>
 
@@ -1051,8 +1090,8 @@ export default function App() {
                   <dl className="ctl">
                     <dt>Session</dt>
                     <dd>
-                      Seed the dream. Pin keeps the rail open; Hide collapses it. Reset seed (U) returns to the
-                      original still.
+                      Seed the dream. Pin keeps the rail open; Hide unpins and collapses it. Reset seed (U)
+                      returns to the last open view, or the original still if none.
                     </dd>
                     <dt>Intention</dt>
                     <dd>
@@ -1062,8 +1101,9 @@ export default function App() {
                     </dd>
                     <dt>Navigate</dt>
                     <dd>
-                      W walk · Z back · arrows look/turn · Space jump · nav ball look (and walk if the knob is on)
-                      · Reset view (R) to the horizon. Click the dream for mouse-look; Esc releases the pointer.
+                      W walk · Z back · arrows look/turn · Space jump · wheel look-out from a close surface ·
+                      nav ball look (and walk if the knob is on) · Reset view (R) to the horizon. Click the
+                      dream for mouse-look; Esc releases the pointer.
                     </dd>
                     <dt>Knobs</dt>
                     <dd>
@@ -1080,8 +1120,8 @@ export default function App() {
             {hasFrame && !dreaming && <div className="veil">Stopped. Start Dreaming to continue from a seed.</div>}
           </div>
           <p className="help">
-            W walk forward · Z walk back · ← → turn · ↑ ↓ look · R reset to horizon · U reset seed · Space jump ·
-            click dream to mouse-look · Esc releases lock
+            W walk forward · Z walk back · ← → turn · ↑ ↓ look · wheel look-out · R horizon · U last open view ·
+            Space jump · click dream to mouse-look · Esc releases lock
           </p>
         </main>
       </div>

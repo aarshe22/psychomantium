@@ -29,6 +29,17 @@ export type Stats = {
   prompt_apply?: string;
   error?: string | null;
   model?: string;
+  native_size?: { width?: number; height?: number };
+  stream_size?: { width?: number; height?: number };
+  scene?: {
+    lock?: number | null;
+    openness?: number | null;
+    locked?: boolean;
+    open?: boolean;
+    event?: string;
+    open_memories?: number;
+    walk_held?: boolean;
+  };
   models?: { id: string; label: string; width?: number; height?: number; selected?: boolean }[];
   ready?: boolean;
   loading?: boolean;

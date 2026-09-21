@@ -43,7 +43,9 @@ The Session **standing world prompt** is stored and shown. On this 1B checkpoint
 
 ## Scene authoring
 
-Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium can paint a start frame with Klein from the standing prompt (`POST /api/seeds/paint`). **Speak** always Klein-inpaints the current still with that sentence as the modifier, whether or not **Auto-InPaint** is on. Auto-InPaint only refines detail while you stand still. Color-grade Speak lines (night/forest/day) still reseed if Klein is skipped; when Klein runs they are applied as the inpaint modifier instead.
+Biome’s “custom prompting” is a **second model**: Gemma VLM + FLUX.2-klein-4B write a new first-person JPEG, then Waypoint continues from that seed. Psychomantium can paint a start frame with Klein from the standing prompt (`POST /api/seeds/paint`). **Send Intention** always Klein-inpaints the current still. **Dream drift** continues the place while you stand still. Color-grade Speak lines (night/forest/day) still reseed if Klein is skipped; when Klein runs they are applied as the inpaint modifier instead.
+
+If the view collapses to one repeating surface, forward walk is held and the engine reseeds the last open first-person still (or Klein pulls the camera back). Looking up or scrolling out from a close surface is that same scene cut, not a zoom of the wall.
 
 ## Known limitations
 
