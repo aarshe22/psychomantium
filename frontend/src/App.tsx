@@ -1070,7 +1070,14 @@ export default function App() {
             </Accordion>
 
             <Accordion id="knobs" title="Experience knobs" open={!!openAcc.knobs} onToggle={toggleAcc}>
-              <Knobs prefs={prefs} saved={saved} onChange={livePrefs} onSave={savePrefs} onReset={resetPrefs} />
+              <Knobs
+                prefs={prefs}
+                saved={saved}
+                nativeHeight={stats.native_size?.height || 360}
+                onChange={livePrefs}
+                onSave={savePrefs}
+                onReset={resetPrefs}
+              />
             </Accordion>
 
             <Accordion id="diag" title="Diagnostics" open={!!openAcc.diag} onToggle={toggleAcc}>
@@ -1134,7 +1141,10 @@ export default function App() {
                 </div>
                 <div>
                   <dt>prompt apply</dt>
-                  <dd>{stats.prompt_apply ?? (stats.prompt_conditioning ? "—" : "not wired on 1B")}</dd>
+                  <dd>
+                    {stats.prompt_apply ||
+                      (stats.prompt_conditioning ? "—" : "not wired on 1B (prompt_conditioning=null)")}
+                  </dd>
                 </div>
                 <div>
                   <dt>error</dt>

@@ -122,6 +122,21 @@ def as_frame_batch(decoded) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
+KLEIN_MAX_H = 360
+
+
+def klein_work_size(native_wh: tuple[int, int]) -> tuple[int, int]:
+    """Klein + 720p Waypoint on one GPU OOMs / CUDA-asserts. Edit at 360p, then scale."""
+    w, h = int(native_wh[0]), int(native_wh[1])
+    if h <= KLEIN_MAX_H:
+        return w, h
+    nh = KLEIN_MAX_H
+    nw = int(round(w * nh / max(h, 1)))
+    nw -= nw % 2
+    nh -= nh % 2
+    return max(16, nw), max(16, nh)
+
+
 def seed_for_append(seed: torch.Tensor, n_frames: int) -> torch.Tensor:
     """OWL encode wants [H,W,C]; TAEHV wants [T,H,W,C] with T=temporal_compression."""
     n = max(int(n_frames), 1)
@@ -500,7 +515,12 @@ class EngineWorker:
         engine.gen_frame = types.MethodType(gen_frame, engine)
 
     def _apply_scheduler(self, engine) -> None:
-        """Only safe before torch.compile / CUDA graphs capture."""
+        """Only safe before torch.compile / CUDA graphs capture.
+
+        Lerp the checkpoint's own sigma ladder. A hardcoded 360p curve used to
+        overwrite 720p's [1, 0.9, 0.75, 0.3, 0] and could NaN the compiled Euler
+        step (device-side assert on the next CUDA sync).
+        """
         if engine is None or self._sigma_base is None:
             return
         sharp = float(self.prefs.get("dream_sharpness", 0.45))
@@ -508,11 +528,16 @@ class EngineWorker:
         if abs(sharp - 0.45) < 0.02:
             engine.scheduler_sigmas.copy_(base)
             return
-        mild = torch.tensor([1.0, 0.95, 0.88, 0.55, 0.0], device=base.device, dtype=base.dtype)
-        wild = torch.tensor([1.0, 0.62, 0.28, 0.10, 0.0], device=base.device, dtype=base.dtype)
-        if mild.shape != base.shape:
+        t = float(max(-1.0, min(1.0, (sharp - 0.45) / 0.55)))
+        if t < 0:
+            mild = base.clone()
+            mild[:-1] = torch.minimum(mild[:-1] + (-t) * 0.08 * (1.0 - mild[:-1]), mild.new_tensor(1.0))
+            engine.scheduler_sigmas.copy_(mild)
             return
-        engine.scheduler_sigmas.copy_(mild.lerp(wild, sharp))
+        wild = base.clone()
+        if wild.numel() > 2:
+            wild[1:-1] = wild[1:-1] * (1.0 - 0.55 * t)
+        engine.scheduler_sigmas.copy_(wild)
 
     def _request_cuda_restart(self, reason: str) -> None:
         self.last_error = reason
@@ -633,13 +658,13 @@ class EngineWorker:
             self.last_prompt_result = "empty"
             return self.last_prompt_result
         if not self.prompt_supported:
-            self.last_prompt_result = "set_prompt_unavailable: prompt_conditioning=null"
+            self.last_prompt_result = "not wired on 1B (prompt_conditioning=null)"
             for intent in self.intentions:
                 if intent.kind == "world" and intent.active:
                     intent.status = "submitted"
                     intent.note = (
-                        "Active as a standing world rule. This checkpoint has "
-                        "prompt_conditioning=null, so set_prompt is not wired into the DiT. "
+                        "Active as a standing world rule. This 1B checkpoint has "
+                        "prompt_conditioning=null, so set_prompt cannot run. "
                         "Pick Waypoint 1.1 Small for live text, or keep using Klein inpaint. "
                         "The seed image and movement still drive the world."
                     )
@@ -791,7 +816,11 @@ class EngineWorker:
     def _paint_on_gpu(self, text: str) -> dict[str, Any]:
         if authoring.pipeline is None:
             authoring.load()
-        pil, klein_prompt = authoring.generate_from_text(text, self.frame_size)
+        work = klein_work_size(self.frame_size)
+        pil, klein_prompt = authoring.generate_from_text(text, work)
+        native_w, native_h = self.frame_size
+        if pil.size != (native_w, native_h):
+            pil = pil.resize((native_w, native_h), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         pil.save(buf, format="JPEG", quality=92)
         jpeg = buf.getvalue()
@@ -1302,15 +1331,22 @@ class EngineWorker:
         self.inpaint_progress = 0.08
         self._publish_inpaint_progress(0.08)
         prev = np.asarray(frames[-1])
+        native_h, native_w = int(prev.shape[0]), int(prev.shape[1])
+        work = klein_work_size((native_w, native_h))
+        src_in = prev
+        if (native_w, native_h) != work:
+            src_in = cv2.resize(prev[..., :3], work, interpolation=cv2.INTER_AREA)
         pil, _prompt = authoring.refine_frame(
-            prev,
-            self.frame_size,
+            src_in,
+            work,
             user_request=modifier,
             on_progress=self._publish_inpaint_progress,
             fallback_prompt=fallback_prompt,
             steps=steps,
         )
         arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
+        if arr.shape[1] != native_w or arr.shape[0] != native_h:
+            arr = cv2.resize(arr, (native_w, native_h), interpolation=cv2.INTER_LINEAR)
         if blend is not None:
             s = float(max(0.0, min(1.0, blend)))
             src = prev[..., :3].astype(np.float32)

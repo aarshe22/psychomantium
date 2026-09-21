@@ -32,7 +32,7 @@ export const PREF_FIELDS: {
     min: 360,
     max: 720,
     step: 60,
-    hint: "JPEG stream size. Capped at the loaded checkpoint (360p or 720p). This never invents extra model pixels.",
+    hint: "JPEG stream size only. Capped at this checkpoint’s native height. It never invents extra DiT pixels.",
   },
   {
     key: "temperature",
@@ -119,12 +119,14 @@ export const PREF_FIELDS: {
 type Props = {
   prefs: Prefs;
   saved: boolean;
+  nativeHeight?: number;
   onChange: (next: Prefs) => void;
   onSave: () => void;
   onReset: () => void;
 };
 
-export default function Knobs({ prefs, saved, onChange, onSave, onReset }: Props) {
+export default function Knobs({ prefs, saved, nativeHeight = 720, onChange, onSave, onReset }: Props) {
+  const resMax = nativeHeight >= 720 ? 720 : 360;
   return (
     <section className="knobs">
       <header className="row">
@@ -156,7 +158,7 @@ export default function Knobs({ prefs, saved, onChange, onSave, onReset }: Props
           <input
             type="range"
             min={f.min}
-            max={f.max}
+            max={f.key === "resolution" ? resMax : f.max}
             step={f.step}
             value={Number(prefs[f.key])}
             onChange={(e) => onChange({ ...prefs, [f.key]: Number(e.target.value) })}
