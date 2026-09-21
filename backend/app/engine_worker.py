@@ -22,6 +22,7 @@ from PIL import Image
 from . import config
 from .intentions import Intention, parse_intention
 from .prefs import clamp_prefs, load_prefs, output_size, save_prefs
+from .scene_authoring import authoring
 
 FRAME_HEADER_MAGIC = 0x50535943  # 'PSYC'
 
@@ -173,6 +174,9 @@ class EngineWorker:
         self._sched_dirty = False
         self._prompt_dirty = True
         self.last_prompt_result = ""
+        self.inpaint_status = "off"
+        self._idle_batches = 0
+        self._inpainted_this_idle = False
 
     def _gpu_call(self, op: str, *args, wait: bool = True):
         box: dict[str, Any] = {"err": None, "result": None}
@@ -354,6 +358,13 @@ class EngineWorker:
             self.prefs = prefs
             self._sched_dirty = True
             self._prompt_dirty = True
+        # Live except scheduler remaps, which are only safe when CUDA graphs are not capturing.
+        if not self.session_active and self.engine is not None:
+            try:
+                self._apply_scheduler(self.engine)
+                self._sched_dirty = False
+            except Exception:
+                pass
         return prefs
 
     def reset_orientation(self) -> dict:
@@ -384,6 +395,9 @@ class EngineWorker:
             "generation_fps": self.generation_fps,
             "max_fps": config.MAX_FPS if bool(self.prefs.get("fps_lock", True)) else None,
             "fps_lock": bool(self.prefs.get("fps_lock", True)),
+            "inpaint": bool(self.prefs.get("inpaint", False)),
+            "inpaint_status": self.inpaint_status,
+            "authoring": authoring.status(),
         }
 
     def set_controls(
@@ -581,6 +595,9 @@ class EngineWorker:
             self._prompt_dirty = True
             self.original_seed = seed.detach().clone()
             self._seed_reset_pending = False
+            self._idle_batches = 0
+            self._inpainted_this_idle = False
+            self.inpaint_status = "armed" if bool(self.prefs.get("inpaint", False)) else "off"
         try:
             return self._gpu_call("start", seed)
         except Exception as exc:
@@ -595,6 +612,12 @@ class EngineWorker:
         engine = self.engine
         assert engine is not None
         engine.reset()
+        if self._sched_dirty:
+            try:
+                self._apply_scheduler(engine)
+                self._sched_dirty = False
+            except Exception:
+                pass
         decoded = engine.append_frame(seed)
         self.try_set_prompt()
         from world_engine import CtrlInput
@@ -639,6 +662,8 @@ class EngineWorker:
             self.session_active = False
             self.thread = None
             self.disconnect_deadline = None
+            if not bool(self.prefs.get("inpaint", False)):
+                self.inpaint_status = "off"
 
     def note_client(self, delta: int) -> None:
         with self.lock:
@@ -735,6 +760,8 @@ class EngineWorker:
             "gpu_util_pct": gpu_util_pct(),
             "fps_lock": bool(prefs.get("fps_lock", True)),
             "max_fps": config.MAX_FPS if bool(prefs.get("fps_lock", True)) else None,
+            "inpaint": bool(prefs.get("inpaint", False)),
+            "inpaint_status": self.inpaint_status,
             "session_active": self.session_active,
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt_conditioning": self.prompt_supported,
@@ -774,6 +801,86 @@ class EngineWorker:
             "active": intent.active,
         }
 
+    def _user_steering(self) -> bool:
+        """True if the player is actually moving/looking, ignoring idle wander."""
+        with self.lock:
+            if self.controls.buttons:
+                return True
+            if self.controls.arrows:
+                return True
+            mx, my = self.controls.mouse
+            if abs(mx) > 0.03 or abs(my) > 0.03:
+                return True
+            ax, ay = self.controls.analog
+            if abs(ax) > 0.12 or abs(ay) > 0.12:
+                return True
+            if self.reset_look:
+                return True
+            for intent in self.intentions:
+                if not intent.active:
+                    continue
+                if intent.hold_buttons:
+                    return True
+                if abs(intent.mouse_bias[0]) > 0.02 or abs(intent.mouse_bias[1]) > 0.02:
+                    return True
+        return False
+
+    def _idle_inpaint_on_gpu(self) -> None:
+        engine = self.engine
+        frames = self.last_frames
+        if engine is None or frames is None or frames.size == 0:
+            return
+        self.inpaint_status = "running"
+        self._publish_batch(frames, gen_ms=0.0, kind="inpaint")
+        pil, _prompt = authoring.refine_frame(frames[-1], self.frame_size)
+        arr = np.asarray(pil.convert("RGB"), dtype=np.uint8)
+        stacked = np.repeat(arr[None, ...], 4, axis=0)
+        seed = torch.from_numpy(np.ascontiguousarray(stacked))
+        engine.reset()
+        decoded = engine.append_frame(seed)
+        out = decoded.detach().to("cpu").numpy()
+        self.last_frames = out
+        self.original_seed = seed.detach().clone()
+        self.inpaint_status = "done"
+        self._publish_batch(out, gen_ms=0.0, kind="inpaint")
+
+    def _maybe_idle_inpaint(self) -> bool:
+        if not bool(self.prefs.get("inpaint", False)):
+            if self.inpaint_status not in {"off", "error"}:
+                self.inpaint_status = "off"
+            self._idle_batches = 0
+            self._inpainted_this_idle = False
+            return False
+        if self._user_steering():
+            self._idle_batches = 0
+            self._inpainted_this_idle = False
+            if self.inpaint_status in {"done", "running"}:
+                self.inpaint_status = "armed"
+            elif self.inpaint_status == "off":
+                self.inpaint_status = "armed"
+            return False
+        self._idle_batches += 1
+        if self._inpainted_this_idle:
+            return False
+        if self._idle_batches < 10:
+            if self.inpaint_status in {"off", "done"}:
+                self.inpaint_status = "armed"
+            return False
+        try:
+            if authoring.pipeline is None:
+                self.inpaint_status = "loading"
+                if self.last_frames is not None:
+                    self._publish_batch(self.last_frames, gen_ms=0.0, kind="inpaint")
+                authoring.load()
+            self._idle_inpaint_on_gpu()
+            self._inpainted_this_idle = True
+            return True
+        except Exception as exc:
+            self.inpaint_status = "error"
+            self._inpainted_this_idle = True
+            self.last_error = f"inpaint: {type(exc).__name__}: {exc}"
+            return False
+
     def _loop(self) -> None:
         from world_engine import CtrlInput  # noqa: F401  (imported for side-effect-free type use)
 
@@ -791,6 +898,8 @@ class EngineWorker:
                 if self._prompt_dirty:
                     self.try_set_prompt()
                     self._prompt_dirty = False
+                if self._maybe_idle_inpaint():
+                    continue
                 for intent in self.intentions:
                     if intent.status == "received" and intent.kind != "transform" and intent.engine_action != "none":
                         intent.status = "submitted"

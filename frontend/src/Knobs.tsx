@@ -11,6 +11,7 @@ export type Prefs = {
   world_prompt: string;
   model_id: string;
   fps_lock: boolean;
+  inpaint: boolean;
 };
 
 export const PREF_FIELDS: {
@@ -75,7 +76,7 @@ export const PREF_FIELDS: {
     min: 0,
     max: 1,
     step: 0.05,
-    hint: "Remaps the 4-step noise schedule. Higher jumps toward the end of the ODE faster.",
+    hint: "Remaps the 4-step noise schedule. Takes effect on engine load and when you enter a new dream (not mid-stream; CUDA graphs).",
   },
 ];
 

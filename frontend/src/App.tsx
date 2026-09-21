@@ -20,6 +20,7 @@ const DEFAULT_PREFS: Prefs = {
   world_prompt: "There is a standard road grid, and buildings.",
   model_id: "Overworld/Waypoint-1.5-1B-360P",
   fps_lock: true,
+  inpaint: false,
 };
 
 function parseJson(text: string, fallback: string) {
@@ -53,7 +54,7 @@ export default function App() {
     session: true,
     intention: true,
     navigate: true,
-    knobs: false,
+    knobs: true,
     diag: false,
   });
 
@@ -456,6 +457,22 @@ export default function App() {
     if (res.ok) setSaved(true);
   }
 
+  async function toggleInpaint() {
+    const next = { ...prefs, inpaint: !prefs.inpaint };
+    setPrefs(next);
+    setSaved(false);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "prefs", prefs: next }));
+    }
+    const res = await fetch("/api/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persist: true, prefs: { ...next, initial_note: prompt } }),
+    });
+    if (res.ok) setSaved(true);
+  }
+
   function toggleAcc(id: string) {
     setOpenAcc((s) => ({ ...s, [id]: !s[id] }));
   }
@@ -525,6 +542,34 @@ export default function App() {
                 : dreaming && deliveredFps > 0
                   ? deliveredFps.toFixed(0)
                   : "—"}
+            </strong>
+          </button>
+          <button
+            type="button"
+            className={`pill metric toggle ${prefs.inpaint ? "on" : ""}`}
+            title={
+              prefs.inpaint
+                ? "Idle inpaint on. Stand still and FLUX.2 Klein will refine this frame; walking continues from the detailed seed."
+                : "Idle inpaint off. Click to refine the current view with FLUX.2 Klein whenever you stand still."
+            }
+            aria-pressed={prefs.inpaint}
+            onClick={toggleInpaint}
+          >
+            <span className="metric-k">InPaint</span>
+            <strong>
+              {!prefs.inpaint
+                ? "off"
+                : stats.inpaint_status === "loading"
+                  ? "load"
+                  : stats.inpaint_status === "running"
+                    ? "…"
+                    : stats.inpaint_status === "done"
+                      ? "ok"
+                      : stats.inpaint_status === "error"
+                        ? "err"
+                        : stats.inpaint_status === "armed"
+                          ? "on"
+                          : "on"}
             </strong>
           </button>
           <div className={`pill ${ready ? "ok" : loadingModel ? "wait" : "bad"}`}>

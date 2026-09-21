@@ -183,7 +183,10 @@ class SceneAuthoring:
         if not config.SCENE_AUTHORING:
             self.error = "SCENE_AUTHORING disabled"
             return
-        if self.ready or self.loading:
+        if self.pipeline is not None:
+            self.ready = True
+            return
+        if self.loading:
             return
         self.loading = True
         self.error = None
@@ -191,11 +194,16 @@ class SceneAuthoring:
 
         t0 = time.perf_counter()
         try:
-            self._load_vlm()
             self._load_klein()
-            self.ready = True
+            try:
+                self._load_vlm()
+            except Exception as exc:
+                log.warning("Gemma VLM skipped (Klein idle inpaint still works): %s", exc)
+            self.ready = self.pipeline is not None
             self.load_seconds = time.perf_counter() - t0
-            log.info("scene authoring loaded in %.1fs", self.load_seconds)
+            if not self.ready:
+                raise RuntimeError("Klein pipeline did not load")
+            log.info("scene authoring loaded in %.1fs (vlm=%s)", self.load_seconds, self.vlm is not None)
         except Exception as exc:
             self.ready = False
             self.error = f"{type(exc).__name__}: {exc}"
@@ -356,6 +364,24 @@ class SceneAuthoring:
         resized = pil.resize((tw, th), Image.Resampling.LANCZOS)
         result = self.run_klein(resized, klein_prompt, th, tw)
         return result.resize((w, h), Image.Resampling.LANCZOS), klein_prompt
+
+    DETAIL_PROMPT = (
+        "Increase photorealistic detail, texture, materials, and lighting of this first-person view. "
+        "Keep the same camera angle, composition, objects, and layout. "
+        "Do not add or remove subjects. Keep everything else unchanged."
+    )
+
+    def refine_frame(self, frame: np.ndarray, size_wh: tuple[int, int]) -> tuple[Image.Image, str]:
+        """Klein edit of the current view. No VLM — fixed detail prompt for idle inpaint."""
+        if self.pipeline is None:
+            raise AuthoringNotReady(self.error or "Klein pipeline not loaded")
+        w, h = size_wh
+        pil = Image.fromarray(np.asarray(frame)).convert("RGB")
+        th, tw = self._align(pil.height, pil.width)
+        resized = pil.resize((tw, th), Image.Resampling.LANCZOS)
+        prompt = self.DETAIL_PROMPT
+        result = self.run_klein(resized, prompt, th, tw)
+        return result.resize((w, h), Image.Resampling.LANCZOS), prompt
 
 
 authoring = SceneAuthoring()

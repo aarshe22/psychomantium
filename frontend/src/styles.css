@@ -109,7 +109,9 @@ h1 {
 .rail-tools button { flex: 1; font-size: 0.7rem; padding: 0.22rem 0.3rem; }
 .rail-tools .pin.on { color: var(--ember); border-color: var(--ember); }
 .rail-body {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.25rem 0.35rem 0.4rem;
   display: flex;
   flex-direction: column;
@@ -127,7 +129,7 @@ h1 {
 }
 
 .acc { border: 1px solid var(--line); background: #0e0c10; flex-shrink: 0; }
-.acc.open { display: flex; flex-direction: column; min-height: 0; }
+.acc.open { display: block; }
 .acc-h {
   width: 100%;
   display: flex;
@@ -139,8 +141,7 @@ h1 {
   padding: 0.28rem 0.45rem;
 }
 .acc-chev { color: var(--ember); }
-.acc-b { padding: 0.35rem 0.45rem 0.45rem; border-top: 1px solid var(--line); }
-.acc.open .acc-b { overflow: hidden; }
+.acc-b { padding: 0.35rem 0.45rem 0.45rem; border-top: 1px solid var(--line); overflow: visible; }
 
 .panel {
   background: color-mix(in srgb, var(--panel) 88%, transparent);
