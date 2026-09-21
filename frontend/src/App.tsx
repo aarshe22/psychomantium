@@ -5,7 +5,15 @@ import Knobs, { Prefs } from "./Knobs";
 import NavBall from "./NavBall";
 import { KEY, Stats, Intention, wsUrl } from "./types";
 
-type GallerySeed = { id: string; label: string; caption: string; url: string; default?: boolean; source?: string };
+type GallerySeed = {
+  id: string;
+  label: string;
+  caption: string;
+  url: string;
+  default?: boolean;
+  source?: string;
+  deletable?: boolean;
+};
 
 const DEFAULT_PREFS: Prefs = {
   resolution: 360,
@@ -38,10 +46,12 @@ export default function App() {
   const [seedId, setSeedId] = useState<string>("");
   const [gallery, setGallery] = useState<GallerySeed[]>([]);
   const [painting, setPainting] = useState(false);
+  const [seedLine, setSeedLine] = useState("");
   const [prompt, setPrompt] = useState(DEFAULT_PREFS.initial_note);
   const [intentionText, setIntentionText] = useState("");
   const [intentions, setIntentions] = useState<Intention[]>([]);
   const [dreaming, setDreaming] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [conn, setConn] = useState<"idle" | "connecting" | "live" | "closed" | "error">("idle");
   const [stats, setStats] = useState<Stats>({});
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +83,7 @@ export default function App() {
   const resetViewRef = useRef<() => void>(() => undefined);
   const resetSeedRef = useRef<() => void>(() => undefined);
   const pacerRef = useRef<FramePacer | null>(null);
+  const stoppingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -254,7 +265,9 @@ export default function App() {
         const msg = JSON.parse(ev.data) as Stats & { type?: string; seq?: number };
         if (msg.type === "ack") return;
         if (msg.intentions) setIntentions(msg.intentions);
-        if (typeof msg.session_active === "boolean") setDreaming(msg.session_active);
+        if (typeof msg.session_active === "boolean") {
+          if (!(stoppingRef.current && msg.session_active)) setDreaming(msg.session_active);
+        }
         setStats((s) => ({ ...s, ...msg }));
         if (msg.error) setError(msg.error);
         return;
@@ -280,7 +293,7 @@ export default function App() {
 
   async function enterDream(e: FormEvent) {
     e.preventDefault();
-    if (dreaming) return;
+    if (dreaming || stoppingRef.current) return;
     if (!file && !seedId) {
       setError("Choose a starting photograph or a gallery seed.");
       return;
@@ -307,12 +320,21 @@ export default function App() {
   }
 
   async function stopDream() {
-    if (!dreaming) return;
+    if (stoppingRef.current || !dreaming) return;
+    stoppingRef.current = true;
+    setStopping(true);
     setDreaming(false);
     clearKeys();
     pacerRef.current?.reset();
     document.exitPointerLock();
-    await fetch("/api/session/stop", { method: "POST" });
+    try {
+      await fetch("/api/session/stop", { method: "POST" });
+    } finally {
+      stoppingRef.current = false;
+      setStopping(false);
+      setDreaming(false);
+      setIntentions([]);
+    }
   }
 
   async function changeModel(nextId: string) {
@@ -384,15 +406,19 @@ export default function App() {
     setPreview(s.url);
   }
 
-  async function paintFromPrompt() {
-    const text = [prefs.world_prompt, prompt].filter(Boolean).join(". ");
+  async function createSeed(text: string) {
+    const line = text.trim();
+    if (!line) {
+      setError("Enter a one-line prompt for the seed.");
+      return;
+    }
     setError(null);
     setPainting(true);
     try {
       const res = await fetch("/api/seeds/paint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text }),
+        body: JSON.stringify({ prompt: line }),
       });
       const data = parseJson(await res.text(), res.statusText) as {
         error?: string;
@@ -402,13 +428,39 @@ export default function App() {
         setError(data.error || `Paint failed (${res.status})`);
         return;
       }
-      const seed = { ...data.seed, url: data.seed.url || `/api/seeds/${data.seed.id}.jpg` };
+      const seed = {
+        ...data.seed,
+        url: data.seed.url || `/api/seeds/${data.seed.id}.jpg`,
+        deletable: true,
+        source: data.seed.source || "klein",
+      };
       setGallery((g) => [seed, ...g.filter((s) => s.id !== seed.id)]);
       setFile(null);
       setSeedId(seed.id);
       setPreview(`${seed.url}?t=${Date.now()}`);
     } finally {
       setPainting(false);
+    }
+  }
+
+  async function paintFromPrompt() {
+    await createSeed([prefs.world_prompt, prompt].filter(Boolean).join(". "));
+  }
+
+  async function deleteSeed(id: string, ev: MouseEvent<HTMLButtonElement>) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    setError(null);
+    const res = await fetch(`/api/seeds/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const data = parseJson(await res.text(), res.statusText);
+    if (!res.ok) {
+      setError(data.error || `Could not delete (${res.status})`);
+      return;
+    }
+    setGallery((g) => g.filter((s) => s.id !== id));
+    if (seedId === id) {
+      setSeedId("");
+      if (preview && !preview.startsWith("blob:")) setPreview(null);
     }
   }
 
@@ -627,8 +679,8 @@ export default function App() {
                 : stats.inpaint_status === "loading"
                   ? "Loading FLUX.2 Klein for inpaint"
                   : prefs.inpaint
-                    ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Speak always inpaints, even if this is off."
-                    : "Auto-InPaint off. Idle standing still will not refine. Speak still inpaints the current view with your intention."
+                    ? "Auto-InPaint on. Stand still and FLUX.2 Klein refines this frame; walking continues from the detailed seed. Send Intention always inpaints the current view, even if this is off."
+                    : "Auto-InPaint off. Idle standing still will not refine. Send Intention still inpaints the current view with your intention."
             }
             aria-pressed={prefs.inpaint}
             onClick={toggleInpaint}
@@ -703,13 +755,23 @@ export default function App() {
                   Standing world prompt
                   <textarea
                     rows={3}
-                    value={prefs.world_prompt}
+                    value={
+                      dreaming
+                        ? stats.session_world_prompt || prefs.world_prompt
+                        : prefs.world_prompt
+                    }
+                    readOnly={dreaming}
                     onChange={(e) => livePrefs({ ...prefs, world_prompt: e.target.value })}
                     onFocus={() => (typingRef.current = true)}
                     onBlur={() => (typingRef.current = false)}
                     placeholder="Peaceful exploration. Empty hands. No weapons."
                   />
                 </label>
+                {dreaming && (
+                  <p className="fine">
+                    Session standing prompt. Each intention is appended here until Stop. Saved preferences stay the original prompt.
+                  </p>
+                )}
                 <label>
                   Initial dream note
                   <textarea
@@ -731,23 +793,67 @@ export default function App() {
                   disabled={painting || dreaming}
                   title="FLUX.2 Klein paints a first-person JPEG from the standing prompt, then you enter from that seed."
                 >
-                  {painting ? "Painting seed…" : "Paint seed from prompt"}
+                  {painting ? "Creating seed…" : "Paint seed from standing prompt"}
+                </button>
+                <label>
+                  One-line seed prompt
+                  <input
+                    value={seedLine}
+                    onChange={(e) => setSeedLine(e.target.value)}
+                    onFocus={() => (typingRef.current = true)}
+                    onBlur={() => (typingRef.current = false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void createSeed(seedLine);
+                      }
+                    }}
+                    placeholder="Sunlit empty alley, cobblestones, no people"
+                    maxLength={500}
+                    disabled={painting || dreaming}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void createSeed(seedLine)}
+                  disabled={painting || dreaming || !seedLine.trim()}
+                  title="Best local generator: FLUX.2 Klein 4B. JPEG is cached on the host under data/seeds/painted/."
+                >
+                  {painting ? "Creating seed…" : "Create seed"}
                 </button>
                 {gallery.length > 0 && (
                   <>
-                    <p className="fine">Royalty-free urban and rural stills</p>
+                    <p className="fine">Cached Klein seeds and royalty-free stills</p>
                     <div className="seed-grid">
                     {gallery.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className={`seed-card ${seedId === s.id && !file ? "on" : ""}`}
-                        onClick={() => pickGallery(s)}
-                        title={s.caption}
-                      >
-                        <img src={s.url} alt={s.label} />
-                        <span>{s.label}</span>
-                      </button>
+                      <div key={s.id} className="seed-wrap">
+                        <button
+                          type="button"
+                          className={`seed-card ${seedId === s.id && !file ? "on" : ""}`}
+                          onClick={() => pickGallery(s)}
+                          title={s.caption}
+                        >
+                          <img src={s.url} alt={s.label} />
+                          <span>{s.label}</span>
+                        </button>
+                        {(s.deletable || s.source === "klein") && (
+                          <button
+                            type="button"
+                            className="seed-trash"
+                            title="Delete this cached seed"
+                            aria-label={`Delete ${s.label}`}
+                            onClick={(e) => void deleteSeed(s.id, e)}
+                          >
+                            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                              <path
+                                fill="currentColor"
+                                d="M6 1h4l.5 1H14v1H2V2h3.5L6 1zm1 4v7H6V5h1zm3 0v7H9V5h1zM3.5 4h9l-.6 10.2A1 1 0 0 1 11 15H5a1 1 0 0 1-1-.8L3.5 4z"
+                              />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
                     ))}
                     </div>
                   </>
@@ -755,14 +861,20 @@ export default function App() {
                 <div className="row">
                   <button
                     type="submit"
-                    className={dreaming ? "is-dreaming" : undefined}
-                    disabled={!dreaming && (!ready || (!file && !seedId) || painting)}
+                    className={dreaming || stopping ? "is-dreaming" : undefined}
+                    disabled={stopping || (!dreaming && (!ready || (!file && !seedId) || painting))}
                     aria-pressed={dreaming}
                   >
-                    {dreaming ? "Dreaming" : "Start Dreaming"}
+                    {dreaming || stopping ? "Dreaming" : "Start Dreaming"}
                   </button>
-                  <button type="button" className="ghost" onClick={stopDream}>
-                    Stop
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={stopDream}
+                    disabled={stopping}
+                    aria-busy={stopping}
+                  >
+                    {stopping ? "Stopping" : dreaming ? "Stop" : "Stopped"}
                   </button>
                 </div>
                 <button type="button" className="ghost" onClick={resetSeed} disabled={!dreaming} title="U">
@@ -783,11 +895,11 @@ export default function App() {
                       typingRef.current = false;
                       clearKeys();
                     }}
-                    placeholder="More buildings. A river to the left. forget that"
+                    placeholder="A river on the left. More buildings ahead."
                   />
                 </label>
-                <button type="submit" disabled={!dreaming || stats.inpaint_status === "running" || stats.inpaint_status === "loading"}>
-                  {stats.inpaint_status === "running" || stats.inpaint_status === "loading" ? "Inpainting…" : "Speak"}
+                <button type="submit" disabled={!dreaming}>
+                  Send Intention
                 </button>
               </form>
               <ul className="intents">

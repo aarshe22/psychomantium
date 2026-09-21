@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import time
 import urllib.request
 from pathlib import Path
@@ -159,24 +160,76 @@ def ensure_gallery() -> Path:
     return SEEDS_DIR
 
 
-def save_painted(jpeg: bytes, label: str = "Klein painted") -> dict[str, Any]:
+PAINTED_ID = re.compile(r"^painted-[0-9]+$")
+
+
+def save_painted(jpeg: bytes, label: str = "Klein painted", prompt: str = "") -> dict[str, Any]:
     PAINTED_DIR.mkdir(parents=True, exist_ok=True)
-    sid = f"painted-{int(time.time())}"
+    sid = f"painted-{int(time.time() * 1000)}"
     path = PAINTED_DIR / f"{sid}.jpg"
     path.write_bytes(jpeg)
-    return {
+    short = (label or prompt or "Klein painted").strip()[:40] or "Klein painted"
+    cap = (prompt or "FLUX.2 Klein seed.").strip()[:240]
+    meta = {
         "id": sid,
-        "label": label[:40],
-        "caption": "FLUX.2 Klein seed from the standing world prompt.",
+        "label": short,
+        "caption": cap,
         "url": f"/api/seeds/{sid}.jpg",
         "source": "klein",
+        "prompt": (prompt or "").strip()[:500],
         "default": False,
+        "deletable": True,
+    }
+    (PAINTED_DIR / f"{sid}.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
+def delete_painted(seed_id: str) -> bool:
+    sid = (seed_id or "").strip()
+    if not PAINTED_ID.match(sid):
+        return False
+    path = PAINTED_DIR / f"{sid}.jpg"
+    info = PAINTED_DIR / f"{sid}.json"
+    if not path.is_file() and not info.is_file():
+        return False
+    if path.is_file():
+        path.unlink()
+    if info.is_file():
+        info.unlink()
+    return True
+
+
+def _painted_meta(path: Path) -> dict[str, Any]:
+    sid = path.stem
+    info_path = PAINTED_DIR / f"{sid}.json"
+    extra: dict[str, Any] = {}
+    if info_path.is_file():
+        try:
+            extra = json.loads(info_path.read_text())
+        except Exception:
+            extra = {}
+    prompt = str(extra.get("prompt") or extra.get("caption") or "").strip()
+    label = str(extra.get("label") or prompt or "Klein painted").strip()[:40]
+    return {
+        "id": sid,
+        "label": label or "Klein painted",
+        "caption": prompt or "FLUX.2 Klein seed cached on the host.",
+        "url": f"/api/seeds/{sid}.jpg",
+        "source": "klein",
+        "prompt": prompt,
+        "default": False,
+        "deletable": True,
     }
 
 
 def catalog() -> list[dict[str, Any]]:
     ensure_gallery()
     out: list[dict[str, Any]] = []
+    painted = sorted(PAINTED_DIR.glob("painted-*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for i, path in enumerate(painted[:48]):
+        rec = _painted_meta(path)
+        rec["default"] = i == 0
+        out.append(rec)
     for item in STARTERS:
         path = CC0_DIR / f"{item['id']}.jpg"
         if not path.is_file():
@@ -189,20 +242,8 @@ def catalog() -> list[dict[str, Any]]:
                 "url": f"/api/seeds/{item['id']}.jpg",
                 "source": "cc0",
                 "license": item.get("license"),
-                "default": bool(item.get("default")),
-            }
-        )
-    painted = sorted(PAINTED_DIR.glob("painted-*.jpg"), reverse=True)
-    for path in painted[:12]:
-        sid = path.stem
-        out.append(
-            {
-                "id": sid,
-                "label": "Klein painted",
-                "caption": "FLUX.2 Klein seed from the standing world prompt.",
-                "url": f"/api/seeds/{sid}.jpg",
-                "source": "klein",
-                "default": False,
+                "default": bool(item.get("default")) and not painted,
+                "deletable": False,
             }
         )
     return out

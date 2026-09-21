@@ -235,6 +235,26 @@ button.ghost { background: transparent; color: var(--mist); border: 1px solid va
   gap: 0.28rem;
   margin: 0.2rem 0 0.35rem;
 }
+.seed-wrap { position: relative; min-width: 0; }
+.seed-wrap .seed-card { width: 100%; }
+.seed-trash {
+  position: absolute;
+  top: 0.12rem;
+  right: 0.12rem;
+  z-index: 2;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a120c;
+  color: #e8c4c4;
+  border: 1px solid #5a3030;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.seed-trash:hover { background: #c45c5c; color: #fff; border-color: #c45c5c; }
 .seed-card {
   display: flex;
   flex-direction: column;

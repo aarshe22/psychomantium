@@ -25,7 +25,7 @@ export type Stats = {
   session_active?: boolean;
   intentions?: Intention[];
   prompt_conditioning?: boolean;
-  composed_prompt?: string;
+  session_world_prompt?: string;
   prompt_apply?: string;
   error?: string | null;
   model?: string;

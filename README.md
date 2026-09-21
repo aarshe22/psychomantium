@@ -68,7 +68,7 @@ Weights are **not** stored in the image. Host directories are bind-mounted; `doc
 | `data/torch-cache/` | `/data/torch-cache` | `torch.compile` inductor/triton + Torch Hub |
 | `data/xdg-cache/` | `/data/xdg-cache` and `/root/.cache` | Catch-all if a library ignores `HF_HOME` |
 | `data/outputs/` | `/data/outputs` | Snapshots / probe movies |
-| `data/seeds/` | `/data/seeds` | Royalty-free urban/rural starter JPEGs and Klein-painted seeds |
+| `data/seeds/` | `/data/seeds` | Royalty-free stills plus Klein-painted JPEGs (`painted/`) that survive container rebuilds |
 
 Do not delete `data/hf-cache/` unless you intend to re-download tens of gigabytes.
 
@@ -98,7 +98,7 @@ Both `Overworld/Waypoint-1.5-1B-360P` (640×360) and `Overworld/Waypoint-1.5-1B`
 - **R** reset orientation to the horizon
 - **U** reset to the original seed (`engine.reset()` + `append_frame`)
 - **Space** jump · click the viewport for pointer-lock mouse look
-- Session: upload a photograph (best prior), royalty-free urban/rural stills, or paint a seed with FLUX.2 Klein from the standing prompt
+- Session: upload a photograph (best prior), royalty-free urban/rural stills, or type a one-liner and FLUX.2 Klein caches a new seed under `data/seeds/painted/` (trash can deletes those)
 - Left rail: accordion of session, intention, navigate, knobs, diagnostics. **Pin** keeps it open; **Hide** collapses it to the left.
 - Movement keys are ignored while the intention/prompt fields are focused
 - **Enter** in the intention field submits; that line inpaints the current still (Klein), even if Auto-InPaint is off

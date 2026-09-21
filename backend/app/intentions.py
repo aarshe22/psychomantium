@@ -112,14 +112,6 @@ def parse_intention(text: str, next_id: int) -> Intention:
         intent.note = "Re-seeds from a brightened copy of the last frames."
         return intent
 
-    if re.search(r"\b(forget that|clear world|reset world rules)\b", t):
-        intent.kind = "world"
-        intent.engine_action = "clear extra world lines (standing prompt stays)"
-        intent.note = "Drops spoken world rules. The standing pre-prompt remains."
-        intent.active = False
-        intent.status = "submitted"
-        return intent
-
     if re.search(r"\b(stop flying|land|walk normally)\b", t) or t in {"clear", "clear holds"}:
         intent.kind = "ongoing"
         intent.hold_buttons = set()
@@ -132,9 +124,9 @@ def parse_intention(text: str, next_id: int) -> Intention:
     intent.kind = "world"
     intent.status = "received"
     intent.active = True
-    intent.engine_action = "Klein inpaint of current still (spoken modifier)"
+    intent.engine_action = "Klein inpaint of current still, then session standing prompt"
     intent.note = (
-        "Spoken line modifies the current first-person still via FLUX.2 Klein, then "
-        "Waypoint continues from those pixels. Independent of Auto-InPaint."
+        "Edits the current first-person still via FLUX.2 Klein, then appends this line "
+        "to the session standing prompt. Cumulative until Stop. Independent of Auto-InPaint."
     )
     return intent

@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 import traceback
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -179,8 +180,7 @@ class EngineWorker:
         self.inpaint_progress = 0.0
         self._idle_batches = 0
         self._inpainted_this_idle = False
-        self._intent_inpaint_pending: Optional[str] = None
-        self._intent_inpaint_id: Optional[int] = None
+        self._intent_inpaint_queue: deque[tuple[str, int]] = deque()
 
     def _gpu_call(self, op: str, *args, wait: bool = True):
         box: dict[str, Any] = {"err": None, "result": None}
@@ -430,19 +430,28 @@ class EngineWorker:
             self.controls.seq += 1
             return self.controls.seq
 
-    def composed_prompt(self) -> str:
+    def session_world_prompt(self) -> str:
+        """Standing prompt plus every active session intention. Not persisted."""
         parts: list[str] = []
         wp = str(self.prefs.get("world_prompt") or "").strip()
-        note = (self.prompt or str(self.prefs.get("initial_note") or "")).strip()
         if wp:
             parts.append(wp.rstrip("."))
-        if note and note.lower() not in wp.lower():
-            parts.append(note.rstrip("."))
         for intent in self.intentions:
-            if intent.active and intent.kind == "world":
-                line = intent.raw.strip().rstrip(".")
-                if line and line.lower() not in " ".join(parts).lower():
-                    parts.append(line)
+            if not intent.active:
+                continue
+            line = intent.raw.strip().rstrip(".")
+            if line and line.lower() not in " ".join(parts).lower():
+                parts.append(line)
+        return ". ".join(parts)[:800]
+
+    def composed_prompt(self) -> str:
+        parts: list[str] = []
+        standing = self.session_world_prompt()
+        note = (self.prompt or str(self.prefs.get("initial_note") or "")).strip()
+        if standing:
+            parts.append(standing.rstrip("."))
+        if note and note.lower() not in standing.lower():
+            parts.append(note.rstrip("."))
         return ". ".join(parts)[:800]
 
     def try_set_prompt(self) -> str:
@@ -494,35 +503,27 @@ class EngineWorker:
                 for old in self.intentions:
                     if old.kind == "ongoing":
                         old.active = False
-            if "clear world" in low or "forget that" in low or low == "reset world rules":
-                for old in self.intentions:
-                    if old.kind == "world":
-                        old.active = False
             self.intentions.append(intent)
             if len(self.intentions) > 40:
                 self.intentions = self.intentions[-40:]
-            if intent.kind == "world":
+            if intent.active:
                 self._prompt_dirty = True
-            if (
-                self.session_active
-                and intent.active
-                and intent.kind in {"world", "transform", "ongoing", "unknown"}
-            ):
-                self._intent_inpaint_pending = intent.raw
-                self._intent_inpaint_id = intent.id
+            if self.session_active and intent.active:
+                self._intent_inpaint_queue.append((intent.raw, intent.id))
                 if "Klein inpaint" not in (intent.engine_action or ""):
                     intent.engine_action = (
                         f"{intent.engine_action}; Klein inpaint of current still"
                         if intent.engine_action
                         else "Klein inpaint of current still"
                     )
-                if "inpaint modifier" not in (intent.note or "").lower():
-                    extra = (
-                        "Spoken line is the inpaint modifier on the current frame, "
-                        "independent of Auto-InPaint."
-                    )
+                extra = (
+                    "Inpaints the current view, then appends this line to the session "
+                    "standing prompt. Earlier intentions stay. Not saved after Stop."
+                )
+                if extra.lower() not in (intent.note or "").lower():
                     intent.note = f"{intent.note} {extra}".strip() if intent.note else extra
-            return intent
+        self._publish_status("intention")
+        return intent
 
     def _merged_ctrl(self):
         from world_engine import CtrlInput
@@ -616,7 +617,7 @@ class EngineWorker:
         buf = io.BytesIO()
         pil.save(buf, format="JPEG", quality=92)
         jpeg = buf.getvalue()
-        meta = save_painted(jpeg, label="Klein painted")
+        meta = save_painted(jpeg, label=text[:40] or "Klein painted", prompt=text)
         return {"ok": True, "seed": meta, "klein_prompt": klein_prompt}
 
     def start_session(self, image_bytes: bytes, prompt: str = "") -> dict[str, Any]:
@@ -647,8 +648,7 @@ class EngineWorker:
             self._seed_reset_pending = False
             self._idle_batches = 0
             self._inpainted_this_idle = False
-            self._intent_inpaint_pending = None
-            self._intent_inpaint_id = None
+            self._intent_inpaint_queue.clear()
             self.inpaint_status = "armed" if bool(self.prefs.get("inpaint", False)) else "off"
         try:
             return self._gpu_call("start", seed)
@@ -707,15 +707,24 @@ class EngineWorker:
         self._publish_batch(frames, gen_ms=0.0, kind="seed")
 
     def stop_session(self) -> None:
+        with self.lock:
+            self.session_active = False
         self.stop_event.set()
+        try:
+            if self.last_frames is not None:
+                self._publish_batch(self.last_frames, gen_ms=0.0, kind="stop")
+        except Exception:
+            pass
         if threading.current_thread() is not self.gpu_thread:
             self.loop_idle.wait(timeout=180)
         with self.lock:
-            self.session_active = False
             self.thread = None
             self.disconnect_deadline = None
+            self.intentions = []
+            self._intent_inpaint_queue.clear()
             if not bool(self.prefs.get("inpaint", False)):
                 self.inpaint_status = "off"
+        self._publish_status("stop")
 
     def note_client(self, delta: int) -> None:
         with self.lock:
@@ -744,8 +753,9 @@ class EngineWorker:
         if not pending or self.last_frames is None or self.engine is None:
             return
         frames = self.last_frames
+        queued_ids = {iid for _, iid in self._intent_inpaint_queue}
         for intent in pending:
-            if intent.id == self._intent_inpaint_id and self._intent_inpaint_pending:
+            if intent.id in queued_ids:
                 continue
             try:
                 graded = color_grade(frames, intent.transform)
@@ -820,6 +830,7 @@ class EngineWorker:
             "session_active": self.session_active,
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt_conditioning": self.prompt_supported,
+            "session_world_prompt": self.session_world_prompt(),
             "error": self.last_error,
             "model": self.model_id,
             "models": self.models_public(),
@@ -880,6 +891,21 @@ class EngineWorker:
                     return True
         return False
 
+    def _publish_status(self, kind: str = "stats") -> None:
+        with self.frame_slot:
+            meta = dict(self.latest_meta) if self.latest_meta else {"type": "stats"}
+            meta["type"] = "stats"
+            meta["kind"] = kind
+            meta["session_active"] = self.session_active
+            meta["inpaint_status"] = self.inpaint_status
+            meta["inpaint_progress"] = self.inpaint_progress
+            meta["intentions"] = [self._intent_public(i) for i in self.intentions[-12:]]
+            meta["composed_prompt"] = self.composed_prompt()
+            meta["session_world_prompt"] = self.session_world_prompt()
+            meta["prompt_apply"] = self.last_prompt_result
+            self.latest_meta = meta
+            self.frame_slot.notify_all()
+
     def _publish_inpaint_progress(self, frac: float) -> None:
         self.inpaint_progress = float(max(0.0, min(1.0, frac)))
         with self.frame_slot:
@@ -918,23 +944,21 @@ class EngineWorker:
         self.inpaint_progress = 0.0
 
     def _maybe_directed_inpaint(self) -> bool:
-        """Speak → Klein edit of the current still. Ignores the Auto-InPaint toggle."""
+        """Send Intention → Klein edit of the current still. Ignores Auto-InPaint."""
         with self.lock:
-            text = (self._intent_inpaint_pending or "").strip()
-            intent_id = self._intent_inpaint_id
-            standing = str(self.prefs.get("world_prompt") or "").strip()
-            note = str(self.prefs.get("initial_note") or "").strip()
-            if text:
-                self._intent_inpaint_pending = None
+            if not self._intent_inpaint_queue:
+                return False
+            text, intent_id = self._intent_inpaint_queue.popleft()
+            text = (text or "").strip()
         if not text:
+            return False
+        if self.stop_event.is_set():
             return False
         if self.last_frames is None or self.engine is None:
             with self.lock:
-                if not (self._intent_inpaint_pending or "").strip():
-                    self._intent_inpaint_pending = text
-                    self._intent_inpaint_id = intent_id
+                self._intent_inpaint_queue.appendleft((text, intent_id))
             return False
-        modifier = ". ".join(part for part in (standing, note, text) if part)
+        modifier = self.composed_prompt()
         intent = next((i for i in self.intentions if i.id == intent_id), None)
         try:
             if authoring.pipeline is None:
@@ -947,7 +971,7 @@ class EngineWorker:
             if intent is not None:
                 if intent.status != "failed":
                     intent.status = "submitted"
-                intent.engine_action = "Klein inpaint of current still (spoken modifier)"
+                intent.engine_action = "Klein inpaint of current still, then session standing prompt"
             return True
         except Exception as exc:
             self.inpaint_status = "error"
@@ -959,6 +983,8 @@ class EngineWorker:
             return False
 
     def _maybe_idle_inpaint(self) -> bool:
+        if self.stop_event.is_set():
+            return False
         if not bool(self.prefs.get("inpaint", False)):
             if self.inpaint_status not in {"off", "error"}:
                 self.inpaint_status = "off"
@@ -986,7 +1012,7 @@ class EngineWorker:
                 self.inpaint_progress = 0.0
                 self._publish_inpaint_progress(0.0)
                 authoring.load()
-            self._idle_inpaint_on_gpu()
+            self._idle_inpaint_on_gpu(modifier=self.composed_prompt() or None)
             self._inpainted_this_idle = True
             return True
         except Exception as exc:
@@ -1016,6 +1042,8 @@ class EngineWorker:
                     continue
                 if self._maybe_idle_inpaint():
                     continue
+                if self.stop_event.is_set():
+                    break
                 for intent in self.intentions:
                     if intent.status == "received" and intent.kind != "transform" and intent.engine_action != "none":
                         intent.status = "submitted"
@@ -1070,6 +1098,7 @@ class EngineWorker:
             "intentions": [self._intent_public(i) for i in self.intentions[-12:]],
             "prompt": self.prompt,
             "world_prompt": self.prefs.get("world_prompt"),
+            "session_world_prompt": self.session_world_prompt(),
             "composed_prompt": self.composed_prompt(),
             "prompt_apply": self.last_prompt_result,
             "prefs": dict(self.prefs),

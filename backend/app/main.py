@@ -14,6 +14,7 @@ from . import config
 from .engine_worker import worker
 from .prefs import SPECS
 from .seeds import catalog as seed_catalog
+from .seeds import delete_painted as seed_delete
 from .seeds import jpeg_for as seed_jpeg
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
@@ -124,6 +125,14 @@ async def paint_seed(payload: dict[str, Any]):
     return result
 
 
+@app.delete("/api/seeds/{name}")
+def delete_seed(name: str):
+    sid = name.removesuffix(".jpg").removesuffix(".jpeg")
+    if not seed_delete(sid):
+        return JSONResponse({"error": "cannot delete"}, status_code=400)
+    return {"ok": True, "id": sid}
+
+
 @app.get("/api/seeds/{name}")
 def get_seed_jpeg(name: str):
     sid = name.removesuffix(".jpg").removesuffix(".jpeg")
@@ -175,8 +184,8 @@ async def start_session(
 
 
 @app.post("/api/session/stop")
-def stop_session():
-    worker.stop_session()
+async def stop_session():
+    await asyncio.to_thread(worker.stop_session)
     return {"ok": True, "session_active": worker.session_active}
 
 
